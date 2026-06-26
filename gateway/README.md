@@ -48,6 +48,56 @@ lalu ketik manual baris berikut untuk meniru ESP32:
 #EVT {"ev":"session_complete","ch":1,"sid":"SESS-1","kwh":2.500,"rp":6100,"sec":300,"st":3}
 ```
 
+## Setup di Raspberry Pi Zero 2 W (ARM, Raspberry Pi OS Lite)
+
+Gateway ini ringan — cocok untuk Pi Zero 2 W. Langkah dari OS bersih:
+
+```bash
+# 1) Update + tool build (serialport butuh kompilasi native di ARM)
+sudo apt update && sudo apt install -y git build-essential python3
+
+# 2) Node.js 20 LTS untuk ARM
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+node -v        # pastikan v20.x
+
+# 3) Ambil kode & install dependency gateway saja
+git clone https://github.com/kurniawan1008/SPKLU_Payment.git ~/spklu
+cd ~/spklu/gateway
+npm install    # kompilasi serialport ~beberapa menit di Pi Zero
+
+# 4) Izin akses port serial (USB-UART) tanpa sudo
+sudo usermod -aG dialout $USER
+#   logout-login (atau reboot) agar grup aktif
+
+# 5) Cari port ESP32 (colok USB dulu)
+npm run list
+#   biasanya /dev/ttyUSB0 (CP210x) atau /dev/ttyACM0 (CH340/native USB)
+
+# 6) Konfigurasi
+cp .env.example .env
+nano .env
+```
+
+Isi `.env` (ganti `DEVICE_KEY` dengan token rahasia dari tabel `devices` di server —
+JANGAN commit token asli ke repo):
+```ini
+SERVER_URL=http://202.74.75.231
+DEVICE_KEY=ganti_dengan_device_key_rahasia
+SERIAL_PORT=/dev/ttyUSB0
+BAUD=115200
+```
+
+```bash
+# 7) Uji jalan
+npm start
+#   harap muncul: ✓ Serial terbuka  &  ✓ Terhubung ke server
+```
+
+> **Tips Pi Zero 2 W:** pakai Raspberry Pi OS **Lite** (tanpa desktop) agar RAM
+> 512 MB lega. Bila `npm install` gagal saat build serialport, pastikan
+> `build-essential` & `python3` terpasang, lalu ulangi `npm install`.
+
 ## Jalankan permanen (Linux, systemd)
 ```ini
 # /etc/systemd/system/spklu-gateway.service
@@ -56,7 +106,7 @@ Description=SPKLU Serial Gateway
 After=network-online.target
 
 [Service]
-WorkingDirectory=/opt/spklu-gateway
+WorkingDirectory=/home/pi/spklu/gateway
 ExecStart=/usr/bin/node index.js
 Restart=always
 RestartSec=5
