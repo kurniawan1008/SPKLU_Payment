@@ -11,12 +11,20 @@ function required(key, fallback) {
 
 const env = process.env.NODE_ENV || 'development';
 
+const jwtSecret = required('JWT_SECRET');
+// Validasi JWT_SECRET punya panjang minimal 32 karakter dan bukan placeholder.
+if (jwtSecret.length < 32 || jwtSecret === 'CHANGE_ME_JWT_SECRET') {
+  throw new Error(
+    '[CONFIG] JWT_SECRET harus minimal 32 karakter dan bukan placeholder di .env'
+  );
+}
+
 const config = {
   env,
   isProd: env === 'production',
   port: parseInt(process.env.PORT || '3000', 10),
 
-  jwtSecret: required('JWT_SECRET'),
+  jwtSecret,
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '8h',
 
   db: {

@@ -1,6 +1,7 @@
 // Titik masuk aplikasi — bootstrap server HTTP + WebSocket.
 const http = require('http');
 const { Server } = require('socket.io');
+const jwt = require('jsonwebtoken');
 
 const config = require('./src/config/env');
 const logger = require('./src/utils/logger');
@@ -17,6 +18,21 @@ async function bootstrap() {
   const io = new Server(server, {
     cors: { origin: config.allowedOrigins, methods: ['GET', 'POST'] },
   });
+
+  // WebSocket authentication middleware — verify JWT sebelum connect.
+  io.use((socket, next) => {
+    const token = socket.handshake.auth?.token;
+    if (!token) return next(new Error('No token provided'));
+    try {
+      const decoded = jwt.verify(token, config.jwtSecret);
+      socket.userId = decoded.id;
+      socket.userRole = decoded.role;
+      next();
+    } catch (err) {
+      next(new Error('Invalid token'));
+    }
+  });
+
   app.set('io', io); // agar controller bisa akses lewat req.app.get('io')
 
   const stopTelemetry = initSockets(io);
@@ -44,6 +60,10 @@ async function bootstrap() {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('unhandledRejection', (reason) => logger.error('Unhandled rejection:', reason));
+  process.on('uncaughtException', (err) => {
+    logger.error('Uncaught exception:', err);
+    process.exit(1);
+  });
 }
 
 bootstrap().catch((err) => {

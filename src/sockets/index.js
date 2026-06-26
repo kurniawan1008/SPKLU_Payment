@@ -6,15 +6,18 @@ const deviceService = require('../services/deviceService');
 // Inisialisasi WebSocket + mesin telemetri. Mengembalikan fungsi stop.
 function initSockets(io) {
   io.on('connection', (socket) => {
-    logger.debug(`WS terhubung: ${socket.id}`);
+    const userId = socket.userId; // dari JWT auth middleware
+    const userRole = socket.userRole;
+    logger.debug(`WS terhubung: ${socket.id} (user ${userId})`);
 
-    // Room per-user agar telemetri tidak bocor ke pengguna lain.
-    socket.on('join_session', (userId) => {
-      if (userId != null) socket.join(`user_${userId}`);
+    // Auto-join user room — gunakan userId dari JWT, bukan input klien.
+    socket.join(`user_${userId}`);
+
+    // Admin room — hanya role ADMIN yang boleh.
+    socket.on('join_admin', () => {
+      if (userRole === 'ADMIN') socket.join('admin');
+      else logger.warn(`User ${userId} mencoba akses admin room tanpa otorisasi`);
     });
-
-    // Room admin untuk broadcast metrik + monitor mesin.
-    socket.on('join_admin', () => socket.join('admin'));
 
     socket.on('disconnect', () => logger.debug(`WS terputus: ${socket.id}`));
   });

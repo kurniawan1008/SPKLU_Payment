@@ -16,11 +16,23 @@ function createApp() {
   // dari header X-Forwarded-For, bukan IP proxy. Hanya percayai 1 hop (Nginx).
   if (config.isProd) app.set('trust proxy', 1);
 
-  app.use(helmet({ contentSecurityPolicy: false }));
+  // CSP: restrict script sources to 'self' untuk mencegah XSS stealing localStorage tokens.
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'"],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          imgSrc: ["'self'", 'data:', 'https:'],
+        },
+      },
+    })
+  );
   app.use(cors({ origin: config.allowedOrigins }));
   app.use(express.json());
 
-  // Rate limit hanya untuk API.
+  // Rate limit: general API limit + brute-force protection untuk auth endpoints.
   const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 300,
@@ -29,7 +41,18 @@ function createApp() {
     message: { success: false, message: 'Terlalu banyak permintaan. Coba lagi nanti.' },
   });
 
+  // Strict limiter untuk auth endpoints (login, register) — 5 percobaan / 15 menit per IP.
+  const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: false,
+    legacyHeaders: false,
+    message: { success: false, message: 'Terlalu banyak percobaan login. Coba lagi dalam 15 menit.' },
+  });
+
   app.use('/api', apiLimiter, routes);
+  app.use('/api/auth/login', authLimiter);
+  app.use('/api/auth/register', authLimiter);
   app.use('/api', notFoundHandler); // API 404
 
   // ===== Frontend React (hasil build Vite) =====

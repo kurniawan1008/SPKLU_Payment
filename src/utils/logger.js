@@ -4,11 +4,12 @@ const current = LEVELS[process.env.LOG_LEVEL] ?? LEVELS.info;
 
 const COLORS = { error: '\x1b[31m', warn: '\x1b[33m', info: '\x1b[36m', debug: '\x1b[90m' };
 const RESET = '\x1b[0m';
+const isTTY = process.stdout.isTTY; // strip ANSI codes jika output bukan terminal (PM2 logs)
 
 function write(level, args) {
   if (LEVELS[level] > current) return;
   const ts = new Date().toISOString();
-  const tag = `${COLORS[level]}[${level.toUpperCase()}]${RESET}`;
+  const tag = isTTY ? `${COLORS[level]}[${level.toUpperCase()}]${RESET}` : `[${level.toUpperCase()}]`;
   const sink = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
   sink(`${ts} ${tag}`, ...args);
 }

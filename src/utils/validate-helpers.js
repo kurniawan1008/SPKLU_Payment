@@ -37,6 +37,10 @@ function makeValidator(rules) {
         errors[field] = `${rule.label || field} minimal ${rule.minLength} karakter`; continue;
       }
 
+      if (rule.maxLength && String(val).length > rule.maxLength) {
+        errors[field] = `${rule.label || field} maksimal ${rule.maxLength} karakter`; continue;
+      }
+
       if (rule.enum && !rule.enum.includes(val)) {
         errors[field] = `${rule.label || field} tidak valid`; continue;
       }

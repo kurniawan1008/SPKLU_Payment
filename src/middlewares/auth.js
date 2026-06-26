@@ -12,7 +12,8 @@ function authenticate(req, res, next) {
     req.user = jwt.verify(token, config.jwtSecret);
     next();
   } catch {
-    next(ApiError.forbidden('Token tidak valid atau telah kedaluwarsa.'));
+    // 401 Unauthorized untuk token invalid/expired, bukan 403 Forbidden.
+    next(ApiError.unauthorized('Token tidak valid atau telah kedaluwarsa.'));
   }
 }
 

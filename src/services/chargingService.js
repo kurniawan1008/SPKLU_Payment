@@ -1,3 +1,4 @@
+const { randomUUID } = require('crypto');
 const { pool } = require('../config/db');
 const config = require('../config/env');
 const ApiError = require('../utils/ApiError');
@@ -45,7 +46,7 @@ async function startCharging(userId, { channelId, mode, amount }, io) {
       throw ApiError.badRequest('Saldo Anda tidak mencukupi untuk target pengisian ini.');
     }
 
-    const sessionId = 'SESS-' + Date.now();
+    const sessionId = 'SESS-' + randomUUID();
     await conn.query(
       'INSERT INTO sessions (id, user_id, channel_id, start_mode, target_kwh, status) VALUES (?,?,?,?,?,"ACTIVE")',
       [sessionId, userId, channelId, startMode, targetKwh]

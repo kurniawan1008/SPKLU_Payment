@@ -32,11 +32,11 @@ async function login(data) {
 
   const [rows] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
   const user = rows[0];
-  if (!user) throw ApiError.badRequest('Akun tidak ditemukan.');
+  // Generic error — mencegah user enumeration. Tidak bedakan "akun tidak ada" vs "password salah".
+  if (!user || !(await bcrypt.compare(password, user?.password || ''))) {
+    throw ApiError.unauthorized('Email atau kata sandi tidak valid.');
+  }
   if (user.status === 'SUSPENDED') throw ApiError.forbidden('Akun Anda ditangguhkan. Hubungi admin.');
-
-  const valid = await bcrypt.compare(password, user.password);
-  if (!valid) throw ApiError.badRequest('Kata sandi salah.');
 
   const token = jwt.sign(
     { id: user.id, email: user.email, role: user.role, full_name: user.full_name },

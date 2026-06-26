@@ -1,11 +1,11 @@
 const { makeValidator } = require('../utils/validate-helpers');
 
 const updateProfileSchema = makeValidator({
-  full_name: { required: true, label: 'Nama lengkap' },
-  username: { required: true, minLength: 3, label: 'Nama pengguna' },
-  npk: { required: true, label: 'NPK' },
-  phone: { required: true, label: 'Nomor telepon' },
-  email: { required: true, type: 'email', label: 'Email' },
+  full_name: { required: true, maxLength: 255, label: 'Nama lengkap' },
+  username: { required: true, minLength: 3, maxLength: 50, label: 'Nama pengguna' },
+  npk: { required: true, maxLength: 50, label: 'NPK' },
+  phone: { required: true, maxLength: 20, label: 'Nomor telepon' },
+  email: { required: true, type: 'email', maxLength: 255, label: 'Email' },
 });
 
 const topupSchema = makeValidator({
@@ -19,7 +19,7 @@ const startChargingSchema = makeValidator({
 });
 
 const stopChargingSchema = makeValidator({
-  sessionId: { required: true, label: 'ID sesi' },
+  sessionId: { required: true, maxLength: 100, label: 'ID sesi' },
 });
 
 module.exports = { updateProfileSchema, topupSchema, startChargingSchema, stopChargingSchema };
