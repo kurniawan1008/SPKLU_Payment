@@ -259,10 +259,14 @@ async function getAnalytics(days = 14) {
   // --- Performa per titik SPKLU ---
   // Gabungan: agregat sesi NYATA (via channels.station_id) + metadata stasiun
   // (status, konektor, daya, tipe) agar SEMUA stasiun tampil walau belum ada sesi.
+  // COUNT(DISTINCT CASE..) agar hitung status channel tidak terinflasi oleh
+  // LEFT JOIN sessions (satu channel bisa punya banyak baris sesi).
   const [stationPerfRows] = await pool.query(
     `SELECT st.id AS station_id, st.name, st.city, st.status,
             st.connectors, st.available, st.power_kw, st.type,
             COUNT(DISTINCT c.id) AS channels,
+            COUNT(DISTINCT CASE WHEN c.status='READY' THEN c.id END)    AS ch_ready,
+            COUNT(DISTINCT CASE WHEN c.status='CHARGING' THEN c.id END) AS ch_charging,
             COUNT(s.id) AS sessions,
             COALESCE(SUM(s.consumed_kwh),0) AS kwh,
             COALESCE(SUM(s.total_cost),0) AS revenue
@@ -277,15 +281,23 @@ async function getAnalytics(days = 14) {
     [range - 1]
   );
   const stationPerf = stationPerfRows.map((r) => {
-    const connectors = Number(r.connectors);
-    const available = Math.max(0, Math.min(Number(r.available), connectors));
-    const busy = connectors - available;
     const powerKw = Number(r.power_kw);
+    const realTotal = Number(r.channels);
+    const hasCh = realTotal > 0;
+    // Channel NYATA bila ada; jatuh ke metadata bila stasiun belum punya channel.
+    const connectors = hasCh ? realTotal : Number(r.connectors);
+    const available = hasCh
+      ? Number(r.ch_ready)
+      : Math.max(0, Math.min(Number(r.available), connectors));
+    const busy = hasCh ? Number(r.ch_charging) : Math.max(0, connectors - available);
+    const status = hasCh
+      ? (Number(r.ch_ready) > 0 ? 'ONLINE' : Number(r.ch_charging) > 0 ? 'BUSY' : 'OFFLINE')
+      : r.status;
     return {
       stationId: Number(r.station_id),
       name: r.name,
       city: r.city,
-      status: r.status,
+      status,
       connectors,
       available,
       busy,
@@ -293,7 +305,7 @@ async function getAnalytics(days = 14) {
       type: r.type,
       capacityKw: powerKw * connectors,
       utilizationPct: connectors > 0 ? Math.round((busy / connectors) * 100) : 0,
-      channels: Number(r.channels),
+      channels: realTotal,
       sessions: Number(r.sessions),
       kwh: Number(r.kwh),
       revenue: Number(r.revenue),

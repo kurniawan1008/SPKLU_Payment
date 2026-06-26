@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Zap, History, User, Wallet, PlusCircle, Plug, Target, Square,
   Radio, ReceiptText, Save, CheckCircle2, BatteryCharging, MapPin,
@@ -7,6 +7,7 @@ import AppLayout from '../components/layout/AppLayout';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
+import Select from '../components/ui/Select';
 import Badge from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import Skeleton from '../components/ui/Skeleton';
@@ -159,8 +160,41 @@ function Sparkline({ data }) {
 function ChargingPanel({ channels, activeSession, onStarted, onStopped }) {
   const toast = useToast();
   const [selected, setSelected] = useState(null);
+  const [selectedStation, setSelectedStation] = useState('');
   const [mode, setMode] = useState('RUPIAH');
   const [amount, setAmount] = useState(50000);
+
+  // Daftar SPKLU yang punya channel (turunan dari data channel — tak perlu fetch lain).
+  const stationList = useMemo(() => {
+    const map = new Map();
+    for (const c of channels) {
+      const key = c.station_id == null ? 'none' : String(c.station_id);
+      if (!map.has(key)) {
+        map.set(key, { key, name: c.station_name || 'Tanpa stasiun', city: c.station_city || '' });
+      }
+    }
+    return Array.from(map.values());
+  }, [channels]);
+
+  // Default pilih SPKLU pertama (yang punya channel siap diutamakan).
+  useEffect(() => {
+    if (selectedStation || stationList.length === 0) return;
+    const withReady = stationList.find((s) =>
+      channels.some((c) => String(c.station_id ?? 'none') === s.key && c.status === 'READY')
+    );
+    setSelectedStation((withReady || stationList[0]).key);
+  }, [stationList, channels, selectedStation]);
+
+  // Channel milik SPKLU terpilih (maks ~3), diberi label per-stasiun CH-01..CH-0N.
+  const stationChannels = useMemo(
+    () => channels.filter((c) => String(c.station_id ?? 'none') === String(selectedStation)),
+    [channels, selectedStation]
+  );
+
+  const onPickStation = (key) => {
+    setSelectedStation(key);
+    setSelected(null); // reset pilihan channel saat ganti SPKLU
+  };
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [live, setLive] = useState({ voltage: 0, current: 0, power: 0, consumedKwh: 0, cost: 0, progress: 0 });
@@ -207,7 +241,7 @@ function ChargingPanel({ channels, activeSession, onStarted, onStopped }) {
   }, [activeSession]);
 
   const start = async () => {
-    if (!selected) return toast('Pilih kanal yang berstatus "Siap" terlebih dahulu.', { type: 'warning' });
+    if (!selected) return toast('Pilih channel yang berstatus "Siap" terlebih dahulu.', { type: 'warning' });
     if (!amount || Number(amount) <= 0) return toast('Masukkan target pengisian yang valid.', { type: 'warning' });
     setStarting(true);
     try {
@@ -243,12 +277,38 @@ function ChargingPanel({ channels, activeSession, onStarted, onStopped }) {
         <h2 className="panel-head"><Plug size={16} /> Konfigurasi pengisian</h2>
 
         <div className="field-group">
-          <span className="field-label">Pilih kanal pengisian</span>
+          <Select
+            label="Pilih SPKLU"
+            value={selectedStation}
+            onChange={(e) => onPickStation(e.target.value)}
+          >
+            {stationList.length === 0 && <option value="">Memuat…</option>}
+            {stationList.map((s) => (
+              <option key={s.key} value={s.key}>
+                {s.name}{s.city ? ` · ${s.city}` : ''}
+              </option>
+            ))}
+          </Select>
+        </div>
+
+        <div className="field-group">
+          <span className="field-label">Pilih channel pengisian</span>
           <div className="channel-grid">
             {channels.length === 0 && <Skeleton height={96} style={{ gridColumn: '1 / -1' }} />}
-            {channels.map((c, i) => {
+            {channels.length > 0 && stationChannels.length === 0 && (
+              <p className="mono" style={{ gridColumn: '1 / -1', fontSize: 12.5, color: 'var(--text-faint)' }}>
+                SPKLU ini belum punya channel.
+              </p>
+            )}
+            {stationChannels.map((c, i) => {
               const ready = c.status === 'READY';
               const isSel = String(selected) === String(c.id);
+              const label = `CH-${String(c.device_ch ?? i + 1).padStart(2, '0')}`;
+              const stat = c.status === 'CHARGING'
+                ? { v: 'busy', t: 'Dipakai' }
+                : c.status === 'OFFLINE'
+                  ? { v: 'muted', t: 'Offline' }
+                  : { v: 'ready', t: 'Siap' };
               return (
                 <button
                   key={c.id}
@@ -258,8 +318,8 @@ function ChargingPanel({ channels, activeSession, onStarted, onStopped }) {
                   className={`ch-card ${isSel ? 'sel' : ''} ${!ready ? 'disabled' : ''}`}
                 >
                   <Plug size={20} className="ch-ic" />
-                  <span className="ch-name">CH-{String(i + 1).padStart(2, '0')}</span>
-                  <Badge variant={ready ? 'ready' : 'busy'}>{ready ? 'Siap' : 'Dipakai'}</Badge>
+                  <span className="ch-name">{label}</span>
+                  <Badge variant={stat.v}>{stat.t}</Badge>
                 </button>
               );
             })}
@@ -341,7 +401,7 @@ function ChargingPanel({ channels, activeSession, onStarted, onStopped }) {
             <div className="standby-tile"><Radio size={30} /></div>
             <div>
               <p className="grotesk" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', fontSize: 14 }}>Siaga — menunggu perintah</p>
-              <p className="mono" style={{ fontSize: 12.5, color: 'var(--text-faint)', marginTop: 6 }}>Pilih kanal lalu tekan Mulai pengisian</p>
+              <p className="mono" style={{ fontSize: 12.5, color: 'var(--text-faint)', marginTop: 6 }}>Pilih channel lalu tekan Mulai pengisian</p>
             </div>
           </div>
         )}

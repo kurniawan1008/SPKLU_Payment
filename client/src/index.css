@@ -232,9 +232,6 @@ a:hover { color: var(--accent); text-decoration: underline; }
 .topbar-sub { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .content { position: relative; z-index: 1; padding: 1.75rem; flex: 1; }
 
-.aurora-pill { display: inline-flex; align-items: center; gap: 7px; padding: 0.45rem 0.9rem; border-radius: 99px; background: var(--surface); border: 1px solid var(--border-mid); font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-muted); }
-.aurora-pill .dot { width: 7px; height: 7px; border-radius: 99px; background: var(--positive); box-shadow: 0 0 8px var(--positive); }
-
 .userchip { display: flex; align-items: center; gap: 0.6rem; padding: 0.35rem 0.85rem 0.35rem 0.4rem; border-radius: 99px; background: var(--surface); border: 1px solid var(--border-mid); }
 .userchip-av { width: 30px; height: 30px; border-radius: 99px; display: grid; place-items: center; font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 13px; color: var(--accent-ink); background: var(--grad-accent); flex-shrink: 0; }
 .userchip-meta { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }

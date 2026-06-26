@@ -98,7 +98,6 @@ export default function Login() {
       {/* ===== Form panel ===== */}
       <main className="auth-main">
         <div style={{ position: 'absolute', top: '1.25rem', right: '1.25rem', display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
-          <span className="aurora-pill"><span className="dot" /> Aurora</span>
           <ThemeToggle />
         </div>
         <div className="auth-box">

@@ -96,7 +96,6 @@ export default function AppLayout({
             </div>
           </div>
           <div className="topbar-r">
-            <span className="aurora-pill hide-sm"><span className="dot" /> Aurora</span>
             <ThemeToggle />
             {headerRight}
             <div className="userchip">

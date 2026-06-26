@@ -51,7 +51,7 @@ const NAV = [
   { id: 'logs', label: 'Log aktivitas', icon: ScrollText },
 ];
 const SUBTITLES = {
-  overview: 'Metrik & status kanal realtime',
+  overview: 'Metrik & status channel realtime',
   analytics: 'Analisis energi, pendapatan & utilisasi',
   devices: 'Monitor & kontrol mesin pengisian fisik',
   stations: 'Kelola titik & detail lokasi SPKLU',
@@ -290,7 +290,7 @@ function MonitorPanel({ channels, stations, onOverrideStop }) {
   return (
     <div>
       <div className="spklu-monitor-head">
-        <h2 className="panel-head"><Plug size={16} /> Monitor kanal pengisian</h2>
+        <h2 className="panel-head"><Plug size={16} /> Monitor channel pengisian</h2>
         <Badge variant="muted">{activeCount} dari {total} aktif</Badge>
         <div className="spklu-picker">
           <Select id="spklu-monitor" value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
@@ -315,7 +315,7 @@ function MonitorPanel({ channels, stations, onOverrideStop }) {
       )}
 
       {total === 0 ? (
-        <EmptyState icon={Plug} title="Belum ada kanal" description="SPKLU ini belum memiliki konektor terdaftar." />
+        <EmptyState icon={Plug} title="Belum ada channel" description="SPKLU ini belum memiliki konektor terdaftar." />
       ) : (
         <div className="channel-monitor">
           {slots.map((slot, i) => {
@@ -351,7 +351,7 @@ function MonitorPanel({ channels, stations, onOverrideStop }) {
                       </Button>
                     </>
                   ) : (
-                    <p className="mono" style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>Kanal idle — siap digunakan.</p>
+                    <p className="mono" style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>Channel idle — siap digunakan.</p>
                   )}
                 </Card>
               );
@@ -558,14 +558,14 @@ function AnalyticsPanel() {
         {/* Utilisasi kanal */}
         <Card style={{ padding: '1.5rem' }}>
           <div className="admin-chart-head">
-            <h2 className="panel-head"><Plug size={16} /> Utilisasi kanal</h2>
+            <h2 className="panel-head"><Plug size={16} /> Utilisasi channel</h2>
             <div className="admin-legend">
               <span><i style={{ background: 'var(--accent)' }} /> Sesi</span>
               <span><i style={{ background: 'var(--cyan)' }} /> kWh</span>
             </div>
           </div>
           {channelUtil.length === 0 ? (
-            <EmptyState icon={Plug} title="Belum ada utilisasi" description="Data akan muncul setelah kanal terpakai." />
+            <EmptyState icon={Plug} title="Belum ada utilisasi" description="Data akan muncul setelah channel terpakai." />
           ) : (
             <div className="admin-chart-sm">
               <ResponsiveContainer>
@@ -966,7 +966,7 @@ function DevicesPanel() {
       >
         {deleting && (
           <p className="mono" style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-            Hapus mesin <b style={{ color: 'var(--text)' }}>{deleting.name}</b>? Kanal tanpa riwayat sesi
+            Hapus mesin <b style={{ color: 'var(--text)' }}>{deleting.name}</b>? Channel tanpa riwayat sesi
             ikut dihapus; yang punya riwayat dilepas-petakan (audit tetap aman). Gateway harus offline.
           </p>
         )}
@@ -1086,7 +1086,7 @@ function DeviceFormModal({ device, stations, onClose, onSaved }) {
               {[1, 2, 3].map((n) => <option key={n} value={n}>{n} konektor</option>)}
             </Select>
             <p className="mono" style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 4 }}>
-              Membuat {form.connectors} kanal terpetakan ke konektor 1..{form.connectors} mesin. Tidak dapat diubah setelah dibuat.
+              Membuat {form.connectors} channel terpetakan ke konektor 1..{form.connectors} mesin. Tidak dapat diubah setelah dibuat.
             </p>
           </div>
         )}
@@ -1403,9 +1403,11 @@ function StationFormModal({ station, onClose, onSaved }) {
       city: station.city ?? '',
       lat: station.lat ?? '',
       lng: station.lng ?? '',
-      status: station.status ?? 'ONLINE',
-      connectors: String(station.connectors ?? '2'),
-      available: String(station.available ?? '0'),
+      // Pakai metadata mentah (meta*) — field utama kini berisi nilai NYATA dari
+      // channel mesin, sedangkan form ini mengedit metadata stasiun.
+      status: station.metaStatus ?? station.status ?? 'ONLINE',
+      connectors: String(station.metaConnectors ?? station.connectors ?? '2'),
+      available: String(station.metaAvailable ?? station.available ?? '0'),
       powerKw: String(station.powerKw ?? '60'),
       type: station.type ?? 'DC',
       hours: station.hours ?? '24 Jam',

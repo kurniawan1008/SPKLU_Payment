@@ -50,7 +50,17 @@ async function requestTopup(userId, amount) {
 }
 
 async function getChannels() {
-  const [rows] = await pool.query('SELECT * FROM channels ORDER BY id');
+  // Sertakan info stasiun & mesin agar klien bisa mengelompokkan channel per
+  // titik SPKLU (pemilihan channel jadi per-stasiun, tidak datar 12 sekaligus).
+  const [rows] = await pool.query(
+    `SELECT c.*, st.name AS station_name, st.city AS station_city,
+            st.power_kw AS station_power_kw, st.type AS station_type,
+            d.online AS device_online
+     FROM channels c
+     LEFT JOIN stations st ON st.id = c.station_id
+     LEFT JOIN devices d ON d.id = c.device_id
+     ORDER BY c.station_id, c.device_ch, c.id`
+  );
   return rows;
 }
 

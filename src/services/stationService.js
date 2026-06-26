@@ -3,7 +3,31 @@ const ApiError = require('../utils/ApiError');
 
 // Memetakan baris DB (snake_case) ke kontrak Station publik (camelCase) —
 // bentuk persis yang diharapkan GET /api/stations & StationsPanel di klien.
+//
+// Bila query menyertakan agregat channel nyata (ch_total/ch_ready/ch_charging),
+// maka connectors/available/status DITURUNKAN dari kondisi channel sebenarnya
+// (mesin di lapangan), bukan metadata statis. Metadata asli tetap dibawa sebagai
+// metaConnectors/metaAvailable/metaStatus agar form admin tetap mengeditnya.
 function toStation(r) {
+  const metaConnectors = Number(r.connectors);
+  const metaAvailable = Number(r.available);
+  const metaStatus = r.status;
+
+  const chTotal = r.ch_total == null ? null : Number(r.ch_total);
+  const hasChannels = chTotal != null && chTotal > 0;
+  const chReady = Number(r.ch_ready || 0);
+  const chCharging = Number(r.ch_charging || 0);
+
+  let connectors = metaConnectors;
+  let available = metaAvailable;
+  let status = metaStatus;
+  if (hasChannels) {
+    connectors = chTotal;
+    available = chReady;
+    // ada konektor siap → ONLINE; semua terpakai → BUSY (Sibuk); sisanya OFFLINE.
+    status = chReady > 0 ? 'ONLINE' : chCharging > 0 ? 'BUSY' : 'OFFLINE';
+  }
+
   return {
     id: Number(r.id),
     name: r.name,
@@ -11,12 +35,18 @@ function toStation(r) {
     city: r.city,
     lat: Number(r.lat),
     lng: Number(r.lng),
-    status: r.status,
-    connectors: Number(r.connectors),
-    available: Number(r.available),
+    status,
+    connectors,
+    available,
     powerKw: Number(r.power_kw),
     type: r.type,
     hours: r.hours,
+    // Info turunan + metadata mentah (untuk form admin & indikator UI).
+    hasChannels,
+    charging: chCharging,
+    metaConnectors,
+    metaAvailable,
+    metaStatus,
   };
 }
 
@@ -41,8 +71,20 @@ function toColumns(data) {
 }
 
 // Daftar seluruh SPKLU, urut nama (dipakai endpoint publik & admin).
+// LEFT JOIN channels → hitung konektor nyata + status terkini per stasiun,
+// agar tampilan (peta user, tabel admin, monitor) sinkron dgn kondisi lapangan.
 async function listStations() {
-  const [rows] = await pool.query('SELECT * FROM stations ORDER BY name');
+  const [rows] = await pool.query(
+    `SELECT st.*,
+            COUNT(c.id) AS ch_total,
+            COALESCE(SUM(c.status = 'READY'), 0)    AS ch_ready,
+            COALESCE(SUM(c.status = 'CHARGING'), 0) AS ch_charging,
+            COALESCE(SUM(c.status = 'OFFLINE'), 0)  AS ch_offline
+     FROM stations st
+     LEFT JOIN channels c ON c.station_id = st.id
+     GROUP BY st.id
+     ORDER BY st.name`
+  );
   return rows.map(toStation);
 }
 
