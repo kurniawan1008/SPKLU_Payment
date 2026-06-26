@@ -761,13 +761,20 @@ const EVT_VARIANT = {
 function DevicesPanel() {
   const toast = useToast();
   const [devices, setDevices] = useState(null);
+  const [stations, setStations] = useState([]); // untuk dropdown stasiun di form
   const [live, setLive] = useState({});   // { [deviceId]: { t, ch:[...] } } — telemetri terakhir
   const [events, setEvents] = useState([]); // umpan kejadian terbaru (maks 30)
   const [busy, setBusy] = useState(null);  // `${id}` saat ganti mode / `${id}:${ch}` saat clear
+  const [editing, setEditing] = useState(null);  // null=tutup · {}=baru · device=ubah
+  const [deleting, setDeleting] = useState(null); // mesin yang akan dihapus
+  const [keyModal, setKeyModal] = useState(null); // { name, deviceKey, title, isNew }
 
   const load = useCallback(() => {
     api.get('/admin/dashboard')
-      .then((d) => setDevices(Array.isArray(d.devices) ? d.devices : []))
+      .then((d) => {
+        setDevices(Array.isArray(d.devices) ? d.devices : []);
+        setStations(Array.isArray(d.stations) ? d.stations : []);
+      })
       .catch((err) => { toast(err.message, { type: 'error' }); setDevices([]); });
   }, [toast]);
 
@@ -783,7 +790,8 @@ function DevicesPanel() {
       setEvents((list) => [{ ...p, _at: Date.now() }, ...list].slice(0, 30));
     };
     const onMetrics = (p) => {
-      if (p && ['DEVICE_ONLINE', 'DEVICE_OFFLINE', 'DEVICE_MODE'].includes(p.event)) load();
+      const ev = p && p.event;
+      if (['DEVICE_ONLINE', 'DEVICE_OFFLINE', 'DEVICE_MODE', 'DEVICE_ADDED', 'DEVICE_UPDATED', 'DEVICE_DELETED'].includes(ev)) load();
     };
     socket.on('device_state', onState);
     socket.on('device_event', onEvent);
@@ -822,6 +830,35 @@ function DevicesPanel() {
     }
   };
 
+  const revealKey = async (d) => {
+    try {
+      const { deviceKey } = await api.get(`/admin/devices/${d.id}/key`);
+      setKeyModal({ name: d.name, deviceKey, title: 'device_key mesin' });
+    } catch (err) { toast(err.message, { type: 'error' }); }
+  };
+
+  const regenKey = async (d) => {
+    try {
+      const { deviceKey } = await api.post(`/admin/devices/${d.id}/regenerate-key`);
+      setKeyModal({ name: d.name, deviceKey, title: 'device_key BARU', warn: true });
+    } catch (err) { toast(err.message, { type: 'error' }); }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleting) return;
+    setBusy('del');
+    try {
+      await api.del(`/admin/devices/${deleting.id}`);
+      toast(`Mesin "${deleting.name}" dihapus.`, { type: 'success' });
+      setDeleting(null);
+      load();
+    } catch (err) {
+      toast(err.message, { type: 'error' });
+    } finally {
+      setBusy(null);
+    }
+  };
+
   if (!devices) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -844,12 +881,19 @@ function DevicesPanel() {
         <StatCard icon={Power} accent="cyan" label="Mode PAYMENT" value={number(paymentCount)} sub="butuh otorisasi bayar" />
       </div>
 
+      <div className="dev-toolbar">
+        <h2 className="panel-head"><Cpu size={16} /> Daftar mesin SPKLU</h2>
+        <Button onClick={() => setEditing({})} style={{ minHeight: 42, fontSize: 12.5 }}>
+          <PlusCircle size={14} /> Daftarkan mesin
+        </Button>
+      </div>
+
       {devices.length === 0 ? (
         <Card style={{ padding: '1.5rem' }}>
           <EmptyState
             icon={Cpu}
             title="Belum ada mesin terdaftar"
-            description="Daftarkan mesin di tabel devices (db/migration_devices.sql), lalu jalankan gateway di perangkat yang tersambung ke ESP32."
+            description="Klik “Daftarkan mesin” untuk menambahkan mesin SPKLU fisik, pilih stasiun & jumlah konektornya. Anda akan mendapat device_key untuk dipasang di gateway (RasPi)."
           />
         </Card>
       ) : (
@@ -861,6 +905,10 @@ function DevicesPanel() {
             busy={busy}
             onSetMode={setMode}
             onClearFault={clearFault}
+            onEdit={() => setEditing(d)}
+            onDelete={() => setDeleting(d)}
+            onRevealKey={() => revealKey(d)}
+            onRegenKey={() => regenKey(d)}
           />
         ))
       )}
@@ -888,11 +936,166 @@ function DevicesPanel() {
           </div>
         )}
       </Card>
+
+      {/* Form daftar / ubah mesin */}
+      <DeviceFormModal
+        device={editing}
+        stations={stations}
+        onClose={() => setEditing(null)}
+        onSaved={(created) => {
+          setEditing(null);
+          load();
+          if (created && created.deviceKey) {
+            setKeyModal({ name: created.name, deviceKey: created.deviceKey, title: 'Mesin terdaftar — device_key', isNew: true });
+          }
+        }}
+      />
+
+      {/* Konfirmasi hapus mesin */}
+      <Modal
+        open={!!deleting}
+        onClose={() => setDeleting(null)}
+        title="Hapus mesin"
+        icon={Trash2}
+        footer={
+          <div style={{ display: 'flex', gap: 10, width: '100%' }}>
+            <Button variant="ghost" className="btn-block" onClick={() => setDeleting(null)} style={{ minHeight: 48 }}>Batal</Button>
+            <Button variant="danger" className="btn-block" loading={busy === 'del'} onClick={confirmDelete} style={{ minHeight: 48 }}><Trash2 size={16} /> Hapus</Button>
+          </div>
+        }
+      >
+        {deleting && (
+          <p className="mono" style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+            Hapus mesin <b style={{ color: 'var(--text)' }}>{deleting.name}</b>? Kanal tanpa riwayat sesi
+            ikut dihapus; yang punya riwayat dilepas-petakan (audit tetap aman). Gateway harus offline.
+          </p>
+        )}
+      </Modal>
+
+      {/* Tampilan device_key (sekali lihat / salin) */}
+      <Modal
+        open={!!keyModal}
+        onClose={() => setKeyModal(null)}
+        title={keyModal?.title || 'device_key'}
+        icon={Cpu}
+        footer={<Button className="btn-block" onClick={() => setKeyModal(null)} style={{ minHeight: 48 }}>Selesai</Button>}
+      >
+        {keyModal && <DeviceKeyView name={keyModal.name} deviceKey={keyModal.deviceKey} isNew={keyModal.isNew} warn={keyModal.warn} />}
+      </Modal>
     </div>
   );
 }
 
-function DeviceCard({ device, live, busy, onSetMode, onClearFault }) {
+// Tampilkan device_key dengan tombol salin. device_key = rahasia bersama gateway.
+function DeviceKeyView({ name, deviceKey, isNew, warn }) {
+  const toast = useToast();
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(deviceKey);
+      toast('device_key disalin ke clipboard.', { type: 'success' });
+    } catch {
+      toast('Gagal menyalin — salin manual.', { type: 'error' });
+    }
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+      <p className="mono" style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>
+        Untuk mesin <b style={{ color: 'var(--text)' }}>{name}</b>. Pasang di file <code>gateway/.env</code>
+        sebagai <code>DEVICE_KEY</code> pada perangkat (Raspberry Pi) yang tersambung ke ESP32.
+      </p>
+      <div className="dev-key-box">
+        <code>{deviceKey}</code>
+        <Button variant="ghost" onClick={copy} style={{ minHeight: 36, fontSize: 12, padding: '0 0.7rem' }}>Salin</Button>
+      </div>
+      {(isNew || warn) && (
+        <p className="mono" style={{ fontSize: 11.5, color: 'var(--warning)' }}>
+          ⚠ Simpan sekarang — demi keamanan, kunci hanya ditampilkan saat diminta. {warn ? 'Kunci lama langsung tidak berlaku; perbarui gateway.' : ''}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function DeviceFormModal({ device, stations, onClose, onSaved }) {
+  const toast = useToast();
+  const isEdit = !!(device && device.id != null);
+  const [form, setForm] = useState({ name: '', stationId: '', connectors: 3 });
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!device) return;
+    if (device.id != null) {
+      setForm({ name: device.name || '', stationId: device.stationId ?? '', connectors: device.channels || 3 });
+    } else {
+      setForm({ name: '', stationId: stations[0]?.id ?? '', connectors: 3 });
+    }
+  }, [device, stations]);
+
+  if (!device) return null;
+
+  const submit = async (e) => {
+    if (e) e.preventDefault();
+    if (!form.name.trim()) { toast('Nama mesin wajib diisi.', { type: 'error' }); return; }
+    setBusy(true);
+    try {
+      const base = { name: form.name.trim(), stationId: form.stationId ? Number(form.stationId) : undefined };
+      if (isEdit) {
+        await api.put(`/admin/devices/${device.id}`, base);
+        toast('Mesin diperbarui.', { type: 'success' });
+        onSaved(null);
+      } else {
+        const res = await api.post('/admin/devices', { ...base, connectors: Number(form.connectors) });
+        onSaved(res.device); // memicu modal device_key
+      }
+    } catch (err) {
+      toast(err.message, { type: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={!!device}
+      onClose={onClose}
+      title={isEdit ? 'Ubah mesin' : 'Daftarkan mesin SPKLU'}
+      icon={Cpu}
+      footer={
+        <div style={{ display: 'flex', gap: 10, width: '100%' }}>
+          <Button variant="ghost" className="btn-block" onClick={onClose} style={{ minHeight: 48 }}>Batal</Button>
+          <Button className="btn-block" loading={busy} onClick={submit} style={{ minHeight: 48 }}>
+            {isEdit ? 'Simpan' : 'Daftarkan'}
+          </Button>
+        </div>
+      }
+    >
+      <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+        <Input
+          label="Nama mesin"
+          value={form.name}
+          onChange={(e) => setForm({ ...form, name: e.target.value })}
+          placeholder="mis. CMW Charger #02 (XY12550S)"
+        />
+        <Select label="Stasiun SPKLU" value={form.stationId} onChange={(e) => setForm({ ...form, stationId: e.target.value })}>
+          <option value="">— Tanpa stasiun —</option>
+          {stations.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </Select>
+        {!isEdit && (
+          <div>
+            <Select label="Jumlah konektor" value={form.connectors} onChange={(e) => setForm({ ...form, connectors: e.target.value })}>
+              {[1, 2, 3].map((n) => <option key={n} value={n}>{n} konektor</option>)}
+            </Select>
+            <p className="mono" style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 4 }}>
+              Membuat {form.connectors} kanal terpetakan ke konektor 1..{form.connectors} mesin. Tidak dapat diubah setelah dibuat.
+            </p>
+          </div>
+        )}
+      </form>
+    </Modal>
+  );
+}
+
+function DeviceCard({ device, live, busy, onSetMode, onClearFault, onEdit, onDelete, onRevealKey, onRegenKey }) {
   const d = device;
   // Konektor: pakai telemetri langsung bila ada; jika tidak, fallback ke jumlah kanal terdaftar.
   const liveCh = (live && Array.isArray(live.ch)) ? live.ch : [];
@@ -922,6 +1125,20 @@ function DeviceCard({ device, live, busy, onSetMode, onClearFault }) {
           <Badge variant={d.online ? 'pos' : 'muted'} dot={d.online}>
             {d.online ? 'Online' : 'Offline'}
           </Badge>
+        </span>
+      </div>
+
+      {/* Aksi mesin: kunci gateway + ubah/hapus */}
+      <div className="dev-actions">
+        <Button variant="ghost" onClick={onRevealKey} style={{ minHeight: 34, fontSize: 12, padding: '0 0.7rem' }}>
+          <Cpu size={13} /> Lihat / salin device_key
+        </Button>
+        <Button variant="ghost" onClick={onRegenKey} style={{ minHeight: 34, fontSize: 12, padding: '0 0.7rem' }}>
+          <RefreshCw size={13} /> Buat ulang kunci
+        </Button>
+        <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6 }}>
+          <Button variant="ghost" onClick={onEdit} style={{ minHeight: 34, fontSize: 12, padding: '0 0.7rem' }}><Pencil size={13} /> Ubah</Button>
+          <Button variant="danger" onClick={onDelete} style={{ minHeight: 34, fontSize: 12, padding: '0 0.7rem' }}><Trash2 size={13} /> Hapus</Button>
         </span>
       </div>
 

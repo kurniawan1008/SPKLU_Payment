@@ -3,9 +3,15 @@
 // Tidak bergantung pada service lain (hindari require-cycle): chargingService
 // & deviceGateway boleh meng-import file ini, tidak sebaliknya.
 // ============================================================================
+const crypto = require('crypto');
 const { pool } = require('../config/db');
 
 const DEVICE_NS = '/device'; // namespace Socket.IO khusus gateway mesin
+
+// Token rahasia acak untuk autentikasi gateway (48 hex = 24 byte).
+function genDeviceKey() {
+  return crypto.randomBytes(24).toString('hex');
+}
 
 // Semua mesin (untuk dashboard admin).
 async function listDevices() {
@@ -96,12 +102,121 @@ async function markAllOffline() {
   await pool.query('UPDATE devices SET online = 0');
 }
 
+// Saat mesin terputus: kanal tanpa sesi aktif → OFFLINE (konektor tak terjangkau).
+// Kanal dengan sesi website aktif dibiarkan (ditangani fallback-settle).
+async function markChannelsOffline(deviceId) {
+  await pool.query(
+    `UPDATE channels SET status = 'OFFLINE'
+     WHERE device_id = ? AND current_session_id IS NULL AND status <> 'OFFLINE'`,
+    [deviceId]
+  );
+}
+
 // Kirim satu baris protokol ($...) ke gateway mesin lewat Socket.IO.
 // Mengembalikan true bila ada minimal satu gateway di room device tsb.
 function sendCommand(io, deviceId, line) {
   if (!io) return false;
   io.of(DEVICE_NS).to(`device_${deviceId}`).emit('send', line);
   return true;
+}
+
+// ===== Pendaftaran & pengelolaan mesin (admin) =====
+
+// Daftarkan mesin baru + buat N kanal (konektor fisik) terpetakan device_ch 1..N.
+// Mengembalikan device_key sekali ini (disalin admin ke gateway). Atomik.
+async function createDevice({ name, stationId, connectors }) {
+  const n = Math.max(1, Math.min(3, Number(connectors) || 1));
+  const sid = stationId ? Number(stationId) : null;
+  const deviceKey = genDeviceKey();
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [r] = await conn.query(
+      'INSERT INTO devices (device_key, name, station_id, mode) VALUES (?,?,?,?)',
+      [deviceKey, name, sid, 'OFFLINE']
+    );
+    const deviceId = r.insertId;
+    for (let ch = 1; ch <= n; ch++) {
+      await conn.query(
+        'INSERT INTO channels (station_id, device_id, device_ch, status) VALUES (?,?,?,?)',
+        [sid, deviceId, ch, 'READY']
+      );
+    }
+    await conn.commit();
+    return { id: deviceId, name, stationId: sid, connectors: n, deviceKey };
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
+  }
+}
+
+// Ubah nama & stasiun mesin; kanal mesin ikut pindah stasiun. Atomik.
+async function updateDevice(id, { name, stationId }) {
+  const sid = stationId ? Number(stationId) : null;
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.query('UPDATE devices SET name = ?, station_id = ? WHERE id = ?', [name, sid, id]);
+    await conn.query('UPDATE channels SET station_id = ? WHERE device_id = ?', [sid, id]);
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
+  }
+}
+
+// Hapus mesin. Kanal tanpa riwayat sesi dihapus; yang punya riwayat di-lepas
+// petakan (device_id/device_ch = NULL) agar audit transaksi tetap utuh. Atomik.
+async function deleteDevice(id) {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.query(
+      `DELETE c FROM channels c
+       WHERE c.device_id = ?
+         AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.channel_id = c.id)`,
+      [id]
+    );
+    await conn.query(
+      'UPDATE channels SET device_id = NULL, device_ch = NULL WHERE device_id = ?',
+      [id]
+    );
+    await conn.query('DELETE FROM devices WHERE id = ?', [id]);
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
+  }
+}
+
+// Buat ulang device_key (mis. bila bocor). Gateway lama otomatis tertolak.
+async function regenerateKey(id) {
+  const deviceKey = genDeviceKey();
+  await pool.query('UPDATE devices SET device_key = ? WHERE id = ?', [deviceKey, id]);
+  return deviceKey;
+}
+
+// Ambil device_key untuk ditampilkan/disalin admin (on-demand, bukan di list).
+async function getKey(id) {
+  const [rows] = await pool.query('SELECT device_key FROM devices WHERE id = ? LIMIT 1', [id]);
+  return rows.length ? rows[0].device_key : null;
+}
+
+// Jumlah sesi AKTIF pada kanal milik mesin (untuk cegah hapus saat dipakai).
+async function countActiveSessions(deviceId) {
+  const [[row]] = await pool.query(
+    `SELECT COUNT(*) AS n FROM sessions s
+     JOIN channels c ON c.id = s.channel_id
+     WHERE c.device_id = ? AND s.status = 'ACTIVE'`,
+    [deviceId]
+  );
+  return Number(row.n);
 }
 
 module.exports = {
@@ -115,5 +230,12 @@ module.exports = {
   touch,
   setMode,
   markAllOffline,
+  markChannelsOffline,
   sendCommand,
+  createDevice,
+  updateDevice,
+  deleteDevice,
+  regenerateKey,
+  getKey,
+  countActiveSessions,
 };

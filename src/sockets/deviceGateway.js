@@ -64,6 +64,8 @@ function initDeviceGateway(io) {
 
     socket.on('disconnect', () => {
       deviceService.setOnline(dev.id, false).catch(() => {});
+      // Konektor tanpa sesi aktif → OFFLINE (mesin tak terjangkau).
+      deviceService.markChannelsOffline(dev.id).catch(() => {});
       logger.warn(`Gateway mesin terputus: #${dev.id} ${dev.name}`);
       io.to('admin').emit('admin_metrics_update', { event: 'DEVICE_OFFLINE', deviceId: dev.id });
     });
@@ -102,31 +104,49 @@ async function handleLine(io, socket, line) {
     );
     const byChannel = new Map(actives.map((s) => [Number(s.channel_id), s]));
 
+    let statusChanged = false;
     for (const c of data.ch) {
       const channelId = chMap[Number(c.ch)];
       if (!channelId) continue;
       const sess = byChannel.get(channelId);
-      if (!sess) continue; // konektor idle / sesi non-website (mode FREE)
 
-      const kwh = Number(c.kwh) || 0;
-      const target = Number(sess.target_kwh) || 0;
-      // Simpan progres energi agar fallback-settle & dashboard akurat.
-      await pool.query('UPDATE sessions SET consumed_kwh = ? WHERE id = ? AND status="ACTIVE"', [kwh, sess.id]);
+      if (sess) {
+        // Sesi website aktif → simpan progres energi + telemetri ke pengguna.
+        // Status kanal tetap CHARGING (diset saat $START), tidak diturunkan di sini.
+        const kwh = Number(c.kwh) || 0;
+        const target = Number(sess.target_kwh) || 0;
+        await pool.query('UPDATE sessions SET consumed_kwh = ? WHERE id = ? AND status="ACTIVE"', [kwh, sess.id]);
 
-      io.to(`user_${sess.user_id}`).emit('telemetry_update', {
-        sessionId: sess.id,
-        channelId,
-        consumedKwh: Number(kwh.toFixed(4)),
-        costSoFar: Number((kwh * PRICE_PER_KWH).toFixed(2)),
-        voltage: Number((Number(c.v) || 0).toFixed(1)),
-        current: Number((Number(c.i) || 0).toFixed(1)),
-        power: Number((Number(c.p) || 0).toFixed(1)),
-        progress: target > 0 ? Math.min(100, (kwh / target) * 100) : 0,
-      });
+        io.to(`user_${sess.user_id}`).emit('telemetry_update', {
+          sessionId: sess.id,
+          channelId,
+          consumedKwh: Number(kwh.toFixed(4)),
+          costSoFar: Number((kwh * PRICE_PER_KWH).toFixed(2)),
+          voltage: Number((Number(c.v) || 0).toFixed(1)),
+          current: Number((Number(c.i) || 0).toFixed(1)),
+          power: Number((Number(c.p) || 0).toFixed(1)),
+          progress: target > 0 ? Math.min(100, (kwh / target) * 100) : 0,
+        });
+        continue;
+      }
+
+      // Tanpa sesi website → cerminkan kondisi NYATA konektor di lapangan
+      // (mis. mode FREE / start manual di HMI). st: 2=CHARGING(terpakai),
+      // 4=FAULT→OFFLINE, lainnya READY. Guard current_session_id IS NULL agar
+      // tak menimpa kanal yang sedang dipakai sesi website.
+      const st = Number(c.st);
+      const newStatus = st === 2 ? 'CHARGING' : st === 4 ? 'OFFLINE' : 'READY';
+      const [r] = await pool.query(
+        'UPDATE channels SET status = ? WHERE id = ? AND status <> ? AND current_session_id IS NULL',
+        [newStatus, channelId, newStatus]
+      );
+      if (r.affectedRows > 0) statusChanged = true;
     }
 
     // Snapshot mentah untuk monitor mesin di admin (suhu, proteksi, state, dll).
     io.to('admin').emit('device_state', { deviceId: dev.id, t: data.t, ch: data.ch });
+    // Bila status terpakai/idle kanal berubah → picu refresh Monitor kanal admin.
+    if (statusChanged) io.to('admin').emit('admin_metrics_update', { event: 'CHANNEL_STATE', deviceId: dev.id });
     return;
   }
 

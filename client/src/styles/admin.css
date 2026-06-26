@@ -192,6 +192,42 @@
 .spklu-meta > span svg { color: var(--text-faint); }
 
 /* ===================== MESIN SPKLU (gateway ESP32) ===================== */
+/* --- Toolbar: judul + tombol daftar mesin --- */
+.dev-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+/* --- Baris aksi mesin (kunci, ubah, hapus) --- */
+.dev-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-bottom: 0.1rem;
+}
+
+/* --- Kotak tampilan device_key + tombol salin --- */
+.dev-key-box {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--border-mid);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.dev-key-box code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12.5px;
+  color: var(--text);
+  word-break: break-all;
+  flex: 1;
+}
+
 /* --- Header kartu mesin: identitas kiri + status kanan --- */
 .dev-head {
   display: flex;
