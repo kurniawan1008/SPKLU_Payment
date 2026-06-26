@@ -15,7 +15,7 @@ const topup = asyncHandler(async (req, res) => {
 const getTransactions = asyncHandler(async (req, res) => ok(res, await userService.getTransactions(req.user.id)));
 
 const startCharging = asyncHandler(async (req, res) =>
-  ok(res, await chargingService.startCharging(req.user.id, req.body))
+  ok(res, await chargingService.startCharging(req.user.id, req.body, req.app.get('io')))
 );
 const stopCharging = asyncHandler(async (req, res) =>
   ok(res, await chargingService.stopByUser(req.user.id, req.body.sessionId, req.app.get('io')))

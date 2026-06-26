@@ -2,14 +2,19 @@ const { pool } = require('../config/db');
 const config = require('../config/env');
 const ApiError = require('../utils/ApiError');
 const logger = require('../utils/logger');
+const deviceService = require('./deviceService');
 
 const PRICE_PER_KWH = config.pricePerKwh;
-const TICK_KWH = 0.04;          // energi tersalur per detik (simulasi hardware)
-const NOMINAL_VOLTAGE = 400;    // tegangan nominal DC fast charging (untuk telemetri tampilan)
+const TICK_KWH = 0.04;          // energi tersalur per detik (HANYA simulasi kanal virtual)
+const NOMINAL_VOLTAGE = 400;    // tegangan nominal DC (untuk telemetri tampilan simulasi)
+const STOP_FALLBACK_MS = 20000; // bila mesin tak konfirmasi STOP, settle lokal sebagai jaring pengaman
 
 // Memulai sesi pengisian: validasi kanal & saldo, lalu aktifkan konektor (atomik).
-async function startCharging(userId, { channelId, mode, amount }) {
+// io diperlukan agar — untuk kanal milik mesin nyata — kita bisa kirim $AUTH/$START.
+async function startCharging(userId, { channelId, mode, amount }, io) {
   const conn = await pool.getConnection();
+  let device = null;
+  let sessionInfo = null;
   try {
     await conn.beginTransaction();
 
@@ -17,6 +22,19 @@ async function startCharging(userId, { channelId, mode, amount }) {
     const channel = chRows[0];
     if (!channel) throw ApiError.notFound('Kanal tidak ditemukan.');
     if (channel.status !== 'READY') throw ApiError.conflict('Kanal sedang digunakan.');
+
+    // Kanal terikat mesin fisik? Jika ya, mesin harus online — cegah tagihan palsu.
+    if (channel.device_id != null) {
+      const [devRows] = await conn.query(
+        'SELECT id, online, mode FROM devices WHERE id = ? LIMIT 1',
+        [channel.device_id]
+      );
+      const dev = devRows[0];
+      if (!dev || !dev.online) {
+        throw ApiError.conflict('Mesin SPKLU sedang offline. Coba lagi saat mesin terhubung.');
+      }
+      device = { id: dev.id, ch: Number(channel.device_ch), mode: dev.mode };
+    }
 
     const targetKwh = mode === 'KWH' ? amount : amount / PRICE_PER_KWH;
     const maxCost = targetKwh * PRICE_PER_KWH;
@@ -38,17 +56,30 @@ async function startCharging(userId, { channelId, mode, amount }) {
     );
 
     await conn.commit();
-    return { message: 'Sesi pengisian dimulai. Konektor aktif.', sessionId, targetKwh };
+    sessionInfo = { sessionId, targetKwh };
   } catch (e) {
     await conn.rollback();
     throw e;
   } finally {
     conn.release();
   }
+
+  // Untuk kanal mesin nyata: otorisasi + mulai di hardware.
+  // Batas SELALU dalam kWh (lt=1) agar konsisten dengan tarif server, apa pun
+  // mode input (RUPIAH dikonversi ke kWh). Firmware auto-STOP & lapor kWh final.
+  if (device) {
+    const lval = sessionInfo.targetKwh.toFixed(3);
+    deviceService.sendCommand(io, device.id, `$AUTH,${device.ch},${sessionInfo.sessionId},1,${lval}`);
+    deviceService.sendCommand(io, device.id, `$START,${device.ch}`);
+    logger.info(`Sesi ${sessionInfo.sessionId} → mesin ${device.id} ch${device.ch} ($AUTH+$START, ${lval} kWh).`);
+  }
+
+  return { message: 'Sesi pengisian dimulai. Konektor aktif.', ...sessionInfo };
 }
 
-// Menyelesaikan sesi (otomatis saat target tercapai, atau manual/admin).
-async function settleSession(sessionId, isManualStop, io) {
+// Inti penyelesaian sesi: hitung biaya dari finalKwh, potong saldo, bebaskan
+// kanal, catat log, broadcast. Idempoten via status ACTIVE + FOR UPDATE.
+async function _finalize(sessionId, finalKwh, status, io) {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
@@ -58,18 +89,27 @@ async function settleSession(sessionId, isManualStop, io) {
       [sessionId]
     );
     const session = rows[0];
-    if (!session) throw ApiError.notFound('Sesi tidak ditemukan atau sudah selesai.');
+    if (!session) {
+      await conn.rollback();
+      return null; // sudah diselesaikan oleh jalur lain — no-op.
+    }
 
-    const finalCost = Number(session.consumed_kwh) * PRICE_PER_KWH;
-    const status = isManualStop ? 'STOPPED' : 'COMPLETED';
+    const kwh = Number(finalKwh);
+    const finalCost = kwh * PRICE_PER_KWH;
 
     await conn.query('UPDATE users SET balance = balance - ? WHERE id = ?', [finalCost, session.user_id]);
-    await conn.query('UPDATE sessions SET status=?, end_time=NOW(), total_cost=? WHERE id=?', [status, finalCost, sessionId]);
-    await conn.query('UPDATE channels SET status="READY", current_user_id=NULL, current_session_id=NULL WHERE id=?', [session.channel_id]);
+    await conn.query(
+      'UPDATE sessions SET status=?, end_time=NOW(), total_cost=?, consumed_kwh=? WHERE id=?',
+      [status, finalCost, kwh, sessionId]
+    );
+    await conn.query(
+      'UPDATE channels SET status="READY", current_user_id=NULL, current_session_id=NULL WHERE id=?',
+      [session.channel_id]
+    );
     const chLabel = `CH-${String(session.channel_id).padStart(2, '0')}`;
     await conn.query(
       'INSERT INTO transaction_logs (user_id, amount, type, description) VALUES (?,?,?,?)',
-      [session.user_id, finalCost, 'CHARGING_FEE', `${chLabel} · ${Number(session.consumed_kwh).toFixed(1)} kWh`]
+      [session.user_id, finalCost, 'CHARGING_FEE', `${chLabel} · ${kwh.toFixed(1)} kWh`]
     );
 
     await conn.commit();
@@ -78,16 +118,17 @@ async function settleSession(sessionId, isManualStop, io) {
       io.to(`user_${session.user_id}`).emit('charging_finished', {
         sessionId,
         status,
-        consumedKwh: Number(session.consumed_kwh),
+        consumedKwh: kwh,
         totalCost: finalCost,
-        message: isManualStop
-          ? `Pengisian dihentikan. Energi tersalur ${Number(session.consumed_kwh).toFixed(4)} kWh.`
-          : 'Pengisian selesai — target tercapai.',
+        message:
+          status === 'STOPPED'
+            ? `Pengisian dihentikan. Energi tersalur ${kwh.toFixed(4)} kWh.`
+            : 'Pengisian selesai — target tercapai.',
       });
       io.to('admin').emit('admin_metrics_update', { event: 'SESSION_SETTLED', channelId: session.channel_id });
     }
 
-    logger.info(`Sesi ${sessionId} diselesaikan (${status}), biaya Rp${finalCost.toLocaleString('id-ID')}.`);
+    logger.info(`Sesi ${sessionId} diselesaikan (${status}), ${kwh.toFixed(3)} kWh, Rp${finalCost.toLocaleString('id-ID')}.`);
     return { message: 'Sesi diselesaikan.', status, totalCost: finalCost };
   } catch (e) {
     await conn.rollback();
@@ -97,17 +138,73 @@ async function settleSession(sessionId, isManualStop, io) {
   }
 }
 
-// Stop oleh pengguna — pastikan kepemilikan sesi sebelum settle.
+// Penyelesaian lokal (simulasi / fallback) — pakai consumed_kwh yang tercatat.
+async function settleSession(sessionId, isManualStop, io) {
+  const [rows] = await pool.query('SELECT consumed_kwh FROM sessions WHERE id = ?', [sessionId]);
+  if (!rows.length) throw ApiError.notFound('Sesi tidak ditemukan atau sudah selesai.');
+  const status = isManualStop ? 'STOPPED' : 'COMPLETED';
+  const res = await _finalize(sessionId, Number(rows[0].consumed_kwh), status, io);
+  return res || { message: 'Sesi sudah selesai.', status };
+}
+
+// Penyelesaian dari event mesin (#EVT session_complete/session_stop/cable_unplug).
+// kWh diambil dari register energi modul (akurat) → sumber tagihan resmi.
+async function settleByDevice(channelId, finalKwh, status, io) {
+  const [rows] = await pool.query(
+    'SELECT id FROM sessions WHERE channel_id = ? AND status = "ACTIVE" ORDER BY start_time DESC LIMIT 1',
+    [channelId]
+  );
+  if (!rows.length) return null; // tak ada sesi aktif — abaikan (mis. mode FREE/HMI manual).
+  return _finalize(rows[0].id, finalKwh, status, io);
+}
+
+// Permintaan berhenti (user/admin) — sadar-hardware.
+// Kanal mesin online → kirim $STOP, settle saat #EVT tiba (kWh asli). Jaring
+// pengaman: bila tak ada konfirmasi dalam STOP_FALLBACK_MS, settle lokal.
+async function requestStop(sessionId, io) {
+  const [rows] = await pool.query(
+    'SELECT id, channel_id, status FROM sessions WHERE id = ? LIMIT 1',
+    [sessionId]
+  );
+  if (!rows.length) throw ApiError.notFound('Sesi tidak ditemukan.');
+  if (rows[0].status !== 'ACTIVE') return { message: 'Sesi sudah selesai.', status: rows[0].status };
+
+  const channelId = Number(rows[0].channel_id);
+  const dev = await deviceService.getDeviceForChannel(channelId);
+
+  if (dev && dev.online) {
+    deviceService.sendCommand(io, dev.deviceId, `$STOP,${dev.deviceCh}`);
+    deviceService.sendCommand(io, dev.deviceId, `$DEAUTH,${dev.deviceCh}`);
+    setTimeout(() => {
+      settleSession(sessionId, true, io).catch((err) =>
+        logger.error('Fallback settle gagal:', err.message)
+      );
+    }, STOP_FALLBACK_MS).unref?.();
+    return { message: 'Perintah berhenti dikirim ke mesin.', pending: true };
+  }
+
+  // Kanal virtual atau mesin offline → settle lokal langsung.
+  return settleSession(sessionId, true, io);
+}
+
+// Stop oleh pengguna — pastikan kepemilikan sesi sebelum minta berhenti.
 async function stopByUser(userId, sessionId, io) {
   const [rows] = await pool.query('SELECT user_id FROM sessions WHERE id = ?', [sessionId]);
   if (!rows.length) throw ApiError.notFound('Sesi tidak ditemukan.');
   if (rows[0].user_id !== userId) throw ApiError.forbidden('Sesi ini bukan milik Anda.');
-  return settleSession(sessionId, true, io);
+  return requestStop(sessionId, io);
 }
 
-// Mesin simulasi telemetri — dipanggil tiap detik dari socket engine.
+// Mesin simulasi telemetri — HANYA untuk kanal virtual (TIDAK terikat mesin fisik).
+// Kanal milik mesin (device_id != NULL) selalu dikendalikan hardware: telemetri &
+// settle via #EVT. Bila mesin offline mid-sesi, kanal "pause" (tanpa update) sampai
+// gateway tersambung lagi — JANGAN disimulasikan agar tak ada tagihan palsu.
 async function runTelemetrySimulation(io) {
-  const [sessions] = await pool.query('SELECT * FROM sessions WHERE status = "ACTIVE"');
+  const [sessions] = await pool.query(
+    `SELECT s.* FROM sessions s
+     JOIN channels c ON c.id = s.channel_id
+     WHERE s.status = 'ACTIVE' AND c.device_id IS NULL`
+  );
 
   for (const session of sessions) {
     const target = Number(session.target_kwh);
@@ -121,11 +218,10 @@ async function runTelemetrySimulation(io) {
     } else {
       await pool.query('UPDATE sessions SET consumed_kwh = ? WHERE id = ?', [consumed, session.id]);
       const cost = consumed * PRICE_PER_KWH;
-      // Telemetri tampilan: sedikit jitter agar terlihat hidup (voltase/arus/daya).
-      const voltage = NOMINAL_VOLTAGE + (Math.random() - 0.5) * 4;       // ~398–402 V
-      const baseCurrent = (TICK_KWH * 1000 * 3600) / NOMINAL_VOLTAGE;    // ~360 A
-      const current = baseCurrent + (Math.random() - 0.5) * 10;         // jitter ±5 A
-      const power = (voltage * current) / 1000;                          // kW
+      const voltage = NOMINAL_VOLTAGE + (Math.random() - 0.5) * 4;
+      const baseCurrent = (TICK_KWH * 1000 * 3600) / NOMINAL_VOLTAGE;
+      const current = baseCurrent + (Math.random() - 0.5) * 10;
+      const power = (voltage * current) / 1000;
       io.to(`user_${session.user_id}`).emit('telemetry_update', {
         sessionId: session.id,
         channelId: session.channel_id,
@@ -140,4 +236,12 @@ async function runTelemetrySimulation(io) {
   }
 }
 
-module.exports = { startCharging, settleSession, stopByUser, runTelemetrySimulation, PRICE_PER_KWH };
+module.exports = {
+  startCharging,
+  settleSession,
+  settleByDevice,
+  requestStop,
+  stopByUser,
+  runTelemetrySimulation,
+  PRICE_PER_KWH,
+};

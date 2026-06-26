@@ -1,6 +1,7 @@
 const { pool } = require('../config/db');
 const ApiError = require('../utils/ApiError');
 const stationService = require('./stationService');
+const deviceService = require('./deviceService');
 
 async function listUsers() {
   const [users] = await pool.query(
@@ -364,6 +365,9 @@ async function getDashboard() {
   // Daftar stasiun (camelCase) untuk pemilih SPKLU di Monitor kanal.
   const stations = await stationService.listStations();
 
+  // Daftar mesin SPKLU fisik (status online/offline, mode) untuk monitor admin.
+  const devices = await deviceService.listDevices();
+
   const [logs] = await pool.query(
     `SELECT t.*, u.email, u.username FROM transaction_logs t
      JOIN users u ON t.user_id = u.id ORDER BY t.created_at DESC LIMIT 50`
@@ -385,6 +389,7 @@ async function getDashboard() {
     activeSessions: activeCount.total,
     channels,
     stations,
+    devices,
     logs,
     trend,
     topupRequests,

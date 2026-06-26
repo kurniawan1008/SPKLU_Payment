@@ -4,6 +4,7 @@ import {
   Plug, Power, Ban, CheckCircle2, Search, PlusCircle, ReceiptText, X, Check,
   BarChart3, Clock, Leaf, Trophy, Gauge, Download, ListFilter, Activity,
   MapPin, Pencil, Trash2, ExternalLink,
+  Cpu, Wifi, WifiOff, Thermometer, AlertTriangle, RefreshCw,
 } from 'lucide-react';
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -44,6 +45,7 @@ const C_WARN = 'var(--warning)';
 const NAV = [
   { id: 'overview', label: 'Ringkasan', icon: LayoutDashboard },
   { id: 'analytics', label: 'Analitik', icon: BarChart3 },
+  { id: 'devices', label: 'Mesin SPKLU', icon: Cpu },
   { id: 'stations', label: 'Lokasi SPKLU', icon: MapPin },
   { id: 'users', label: 'Manajemen user', icon: Users },
   { id: 'logs', label: 'Log aktivitas', icon: ScrollText },
@@ -51,6 +53,7 @@ const NAV = [
 const SUBTITLES = {
   overview: 'Metrik & status kanal realtime',
   analytics: 'Analisis energi, pendapatan & utilisasi',
+  devices: 'Monitor & kontrol mesin pengisian fisik',
   stations: 'Kelola titik & detail lokasi SPKLU',
   users: 'Kelola akun & deposit pelanggan',
   logs: 'Audit transaksi sistem',
@@ -75,6 +78,7 @@ export default function Admin() {
     >
       {tab === 'overview' && <Overview />}
       {tab === 'analytics' && <AnalyticsPanel />}
+      {tab === 'devices' && <DevicesPanel />}
       {tab === 'stations' && <StationsAdminPanel />}
       {tab === 'users' && <UsersPanel />}
       {tab === 'logs' && <LogsPanel />}
@@ -716,6 +720,309 @@ function AnalyticsPanel() {
         )}
       </Card>
     </div>
+  );
+}
+
+/* ============================ MESIN SPKLU (GATEWAY ESP32) ============================
+   Monitor & kontrol mesin pengisian fisik. Daftar mesin dari /admin/dashboard
+   (devices), telemetri langsung per-konektor dari event socket 'device_state',
+   umpan kejadian dari 'device_event'. Admin bisa: ganti mode (FREE/PAYMENT) dan
+   clear fault per konektor. Lihat SPKLU_esp32/INTEGRATION.md untuk protokolnya. */
+
+// state konektor (st): 0=IDLE 1=SELECT 2=CHARGING 3=DONE 4=FAULT 5=PAUSED
+const DEV_ST = {
+  0: { label: 'Idle', variant: 'muted' },
+  1: { label: 'Pilih profil', variant: 'muted' },
+  2: { label: 'Mengisi', variant: 'busy' },
+  3: { label: 'Selesai', variant: 'ready' },
+  4: { label: 'Gangguan', variant: 'neg' },
+  5: { label: 'Jeda', variant: 'warn' },
+};
+// kode proteksi (pr): 0=OK selain itu = gangguan/keterangan
+const DEV_PROT = {
+  0: 'OK', 2: 'Arus lebih (OCP)', 4: 'Tegangan rendah (LVP)',
+  7: 'Suhu lebih (OTP)', 13: 'Pengisian selesai',
+};
+const EVT_LABEL = {
+  session_start: 'Sesi dimulai',
+  session_stop: 'Sesi dihentikan',
+  session_complete: 'Sesi selesai',
+  cable_unplug: 'Kabel dicabut',
+  fault: 'Gangguan',
+  ocp_fault: 'Gangguan arus lebih',
+  cleared: 'Fault dibersihkan',
+  comm_recovered: 'Komunikasi pulih',
+};
+const EVT_VARIANT = {
+  session_start: 'busy', session_complete: 'pos', session_stop: 'muted',
+  cable_unplug: 'warn', fault: 'neg', ocp_fault: 'neg', cleared: 'ready', comm_recovered: 'ready',
+};
+
+function DevicesPanel() {
+  const toast = useToast();
+  const [devices, setDevices] = useState(null);
+  const [live, setLive] = useState({});   // { [deviceId]: { t, ch:[...] } } — telemetri terakhir
+  const [events, setEvents] = useState([]); // umpan kejadian terbaru (maks 30)
+  const [busy, setBusy] = useState(null);  // `${id}` saat ganti mode / `${id}:${ch}` saat clear
+
+  const load = useCallback(() => {
+    api.get('/admin/dashboard')
+      .then((d) => setDevices(Array.isArray(d.devices) ? d.devices : []))
+      .catch((err) => { toast(err.message, { type: 'error' }); setDevices([]); });
+  }, [toast]);
+
+  useEffect(() => {
+    load();
+    const socket = getSocket();
+    socket.emit('join_admin');
+
+    const onState = (p) => p && p.deviceId != null &&
+      setLive((m) => ({ ...m, [p.deviceId]: { t: p.t, ch: Array.isArray(p.ch) ? p.ch : [] } }));
+    const onEvent = (p) => {
+      if (!p || !p.ev) return;
+      setEvents((list) => [{ ...p, _at: Date.now() }, ...list].slice(0, 30));
+    };
+    const onMetrics = (p) => {
+      if (p && ['DEVICE_ONLINE', 'DEVICE_OFFLINE', 'DEVICE_MODE'].includes(p.event)) load();
+    };
+    socket.on('device_state', onState);
+    socket.on('device_event', onEvent);
+    socket.on('admin_metrics_update', onMetrics);
+    const poll = setInterval(load, 8000);
+    return () => {
+      socket.off('device_state', onState);
+      socket.off('device_event', onEvent);
+      socket.off('admin_metrics_update', onMetrics);
+      clearInterval(poll);
+    };
+  }, [load]);
+
+  const setMode = async (id, mode) => {
+    setBusy(String(id));
+    try {
+      await api.post(`/admin/devices/${id}/mode`, { mode });
+      toast(`Mode mesin diatur ke ${mode === 'ONLINE' ? 'PAYMENT' : 'FREE'}.`, { type: 'success' });
+      load();
+    } catch (err) {
+      toast(err.message, { type: 'error' });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const clearFault = async (id, ch) => {
+    setBusy(`${id}:${ch}`);
+    try {
+      await api.post(`/admin/devices/${id}/clear`, { channel: ch });
+      toast(`Perintah clear dikirim ke konektor ${ch}.`, { type: 'success' });
+    } catch (err) {
+      toast(err.message, { type: 'error' });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (!devices) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        <div className="stat-row" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+          {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} height={96} />)}
+        </div>
+        <Skeleton height={240} />
+      </div>
+    );
+  }
+
+  const onlineCount = devices.filter((d) => d.online).length;
+  const paymentCount = devices.filter((d) => d.mode === 'ONLINE').length;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+      <div className="stat-row" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+        <StatCard icon={Cpu} accent="accent" label="Total mesin" value={number(devices.length)} sub="terdaftar" />
+        <StatCard icon={Wifi} accent="pos" label="Mesin online" value={number(onlineCount)} sub="gateway terhubung" />
+        <StatCard icon={Power} accent="cyan" label="Mode PAYMENT" value={number(paymentCount)} sub="butuh otorisasi bayar" />
+      </div>
+
+      {devices.length === 0 ? (
+        <Card style={{ padding: '1.5rem' }}>
+          <EmptyState
+            icon={Cpu}
+            title="Belum ada mesin terdaftar"
+            description="Daftarkan mesin di tabel devices (db/migration_devices.sql), lalu jalankan gateway di perangkat yang tersambung ke ESP32."
+          />
+        </Card>
+      ) : (
+        devices.map((d) => (
+          <DeviceCard
+            key={d.id}
+            device={d}
+            live={live[d.id]}
+            busy={busy}
+            onSetMode={setMode}
+            onClearFault={clearFault}
+          />
+        ))
+      )}
+
+      {/* Umpan kejadian mesin (realtime) */}
+      <Card style={{ padding: '1.25rem 1.5rem' }}>
+        <h2 className="panel-head" style={{ marginBottom: '0.9rem' }}><Activity size={16} /> Kejadian mesin terbaru</h2>
+        {events.length === 0 ? (
+          <p className="mono" style={{ fontSize: 12.5, color: 'var(--text-faint)' }}>
+            Belum ada kejadian sejak halaman dibuka. Event akan muncul saat sesi dimulai/selesai atau terjadi gangguan.
+          </p>
+        ) : (
+          <div className="dev-evt-list">
+            {events.map((e, i) => (
+              <div className="dev-evt-row" key={`${e._at}-${i}`}>
+                <Badge variant={EVT_VARIANT[e.ev] || 'muted'} dot>{EVT_LABEL[e.ev] || e.ev}</Badge>
+                <span className="mono" style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                  Mesin #{e.deviceId}{e.ch != null ? ` · konektor ${e.ch}` : ''}
+                  {e.kwh != null ? ` · ${number(e.kwh, 3)} kWh` : ''}
+                  {e.sid ? ` · ${e.sid}` : ''}
+                </span>
+                <span className="mono dev-evt-time">{timeAgo(new Date(e._at).toISOString())}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function DeviceCard({ device, live, busy, onSetMode, onClearFault }) {
+  const d = device;
+  // Konektor: pakai telemetri langsung bila ada; jika tidak, fallback ke jumlah kanal terdaftar.
+  const liveCh = (live && Array.isArray(live.ch)) ? live.ch : [];
+  const connectors = liveCh.length
+    ? liveCh
+    : Array.from({ length: Math.max(0, Number(d.channels) || 0) }, (_, i) => ({ ch: i + 1, st: null }));
+  const modeBusy = busy === String(d.id);
+
+  return (
+    <Card style={{ padding: '1.4rem 1.5rem', display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
+      {/* Header mesin */}
+      <div className="dev-head">
+        <span className="dev-head-id">
+          <Cpu size={18} color={d.online ? 'var(--accent-hi)' : 'var(--text-faint)'} />
+          <span>
+            <b className="grotesk" style={{ color: 'var(--text)' }}>{d.name}</b>
+            <span className="mono dev-head-meta">
+              {d.stationName ? `${d.stationName}${d.stationCity ? ` · ${d.stationCity}` : ''}` : 'Belum terkait stasiun'}
+              {d.fwInfo ? ` · ${d.fwInfo}` : ''}
+            </span>
+          </span>
+        </span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span className="mono" style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+            {d.lastSeenAt ? `terlihat ${timeAgo(d.lastSeenAt)}` : 'belum pernah online'}
+          </span>
+          <Badge variant={d.online ? 'pos' : 'muted'} dot={d.online}>
+            {d.online ? 'Online' : 'Offline'}
+          </Badge>
+        </span>
+      </div>
+
+      {/* Kontrol mode operasi */}
+      <div className="dev-mode">
+        <span className="dev-mode-label">Mode operasi</span>
+        <div className="dev-mode-seg">
+          <button
+            className={d.mode === 'OFFLINE' ? 'on' : ''}
+            disabled={modeBusy}
+            onClick={() => d.mode !== 'OFFLINE' && onSetMode(d.id, 'OFFLINE')}
+          >
+            FREE
+          </button>
+          <button
+            className={d.mode === 'ONLINE' ? 'on' : ''}
+            disabled={modeBusy}
+            onClick={() => d.mode !== 'ONLINE' && onSetMode(d.id, 'ONLINE')}
+          >
+            PAYMENT
+          </button>
+        </div>
+        <span className="mono dev-mode-hint">
+          {d.mode === 'ONLINE'
+            ? 'START butuh otorisasi pembayaran dari website.'
+            : 'START bebas di mesin tanpa pembayaran (uji/maintenance).'}
+        </span>
+        {!d.online && (
+          <span className="mono dev-mode-warn"><WifiOff size={12} /> mesin offline — perintah dikirim saat tersambung</span>
+        )}
+      </div>
+
+      {/* Konektor */}
+      {connectors.length === 0 ? (
+        <p className="mono" style={{ fontSize: 12.5, color: 'var(--text-faint)' }}>
+          Belum ada konektor terpetakan ke mesin ini.
+        </p>
+      ) : (
+        <div className="dev-conn-grid">
+          {connectors.map((c) => {
+            const st = c.st == null ? null : DEV_ST[Number(c.st)] || { label: `st${c.st}`, variant: 'muted' };
+            const prot = Number(c.pr) || 0;
+            const isFault = Number(c.st) === 4 || (prot !== 0 && prot !== 13);
+            const cellBusy = busy === `${d.id}:${c.ch}`;
+            const hasTele = d.online && c.st != null;
+            return (
+              <div className={`dev-conn ${isFault ? 'is-fault' : ''}`} key={c.ch}>
+                <div className="dev-conn-top">
+                  <span className="dev-conn-name"><Plug size={14} /> Konektor {c.ch}</span>
+                  {st
+                    ? <Badge variant={st.variant} dot={Number(c.st) === 2}>{st.label}</Badge>
+                    : <Badge variant="muted">{d.online ? 'Menunggu' : 'Offline'}</Badge>}
+                </div>
+
+                {hasTele ? (
+                  <>
+                    <div className="dev-metrics">
+                      <span><b>{number(c.v, 1)}</b> V</span>
+                      <span><b>{number(c.i, 1)}</b> A</span>
+                      <span><b>{number(c.p, 2)}</b> kW</span>
+                    </div>
+                    <div className="dev-metrics dev-metrics-sub">
+                      <span><b>{number(c.kwh, 3)}</b> kWh</span>
+                      <span><b>{rupiah(c.rp)}</b></span>
+                      <span><b>{Math.floor((Number(c.sec) || 0) / 60)}m {(Number(c.sec) || 0) % 60}s</b></span>
+                    </div>
+                    <div className="dev-conn-foot">
+                      <span className="mono dev-temp">
+                        <Thermometer size={12} /> {number(c.tin, 1)}°C
+                      </span>
+                      {prot !== 0 && (
+                        <span className={`mono dev-prot ${isFault ? 'bad' : ''}`}>
+                          {isFault && <AlertTriangle size={12} />} {DEV_PROT[prot] || `kode ${prot}`}
+                        </span>
+                      )}
+                      {c.auth ? <span className="mono dev-auth">terotorisasi{c.sid ? ` · ${c.sid}` : ''}</span> : null}
+                    </div>
+                  </>
+                ) : (
+                  <p className="mono dev-conn-idle">
+                    {d.online ? 'Menunggu telemetri…' : 'Mesin offline.'}
+                  </p>
+                )}
+
+                {isFault && (
+                  <Button
+                    variant="ghost"
+                    loading={cellBusy}
+                    disabled={!d.online}
+                    onClick={() => onClearFault(d.id, c.ch)}
+                    style={{ minHeight: 34, fontSize: 12, padding: '0 0.7rem', marginTop: 4 }}
+                  >
+                    <RefreshCw size={13} /> Clear fault
+                  </Button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
   );
 }
 

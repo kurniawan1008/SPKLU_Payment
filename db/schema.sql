@@ -28,14 +28,17 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS channels (
   id                  INT AUTO_INCREMENT PRIMARY KEY,
   station_id          INT NULL,                          -- SPKLU pemilik kanal (NULL = belum ditetapkan)
+  device_id           INT NULL,                          -- mesin fisik (NULL = kanal virtual/simulasi)
+  device_ch           TINYINT NULL,                      -- nomor konektor pada mesin (1..3)
   status              ENUM('READY','CHARGING','OFFLINE') NOT NULL DEFAULT 'READY',
   current_user_id     INT NULL,
   current_session_id  VARCHAR(40) NULL,
   created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY idx_channels_station (station_id),
+  KEY idx_channels_device (device_id),
   CONSTRAINT fk_channel_user FOREIGN KEY (current_user_id)
     REFERENCES users(id) ON DELETE SET NULL
-  -- FK ke stations ditambahkan via ALTER di bawah (tabel stations dibuat setelah ini).
+  -- FK ke stations & devices ditambahkan via ALTER di bawah (tabel dibuat setelah ini).
 ) ENGINE=InnoDB;
 
 -- ===== Sesi pengisian =====
@@ -113,17 +116,42 @@ INSERT INTO stations (name, address, city, lat, lng, status, connectors, availab
   ('CMW SPKLU Bandung Pasteur',       'Jl. Dr. Djunjunan No. 143-149, Sukabungah',      'Bandung',           -6.8937030, 107.5780180, 'ONLINE',  2, 2,  60, 'AC',    '07.00 - 21.00'),
   ('CMW SPKLU Surabaya Pakuwon',      'Jl. Mayjen Jonosewojo, Babatan, Wiyung',         'Surabaya',          -7.3011400, 112.6744690, 'ONLINE',  6, 5, 200, 'DC/AC', '24 Jam');
 
--- ===== Kaitkan kanal → stasiun =====
--- Kanal kini dimiliki sebuah SPKLU agar Monitor & Analitik bisa per-stasiun.
+-- ===== Mesin SPKLU fisik (ESP32 XY12550S) =====
+-- Satu baris = satu mesin/gateway. Kanal dipetakan ke konektor mesin (device_ch).
+-- GANTI device_key di bawah dengan token acak rahasia sebelum produksi.
+CREATE TABLE IF NOT EXISTS devices (
+  id           INT AUTO_INCREMENT PRIMARY KEY,
+  device_key   VARCHAR(80)  NOT NULL UNIQUE,            -- rahasia bersama autentikasi gateway
+  name         VARCHAR(120) NOT NULL,
+  station_id   INT NULL,
+  mode         ENUM('ONLINE','OFFLINE') NOT NULL DEFAULT 'OFFLINE',
+  online       TINYINT(1)   NOT NULL DEFAULT 0,
+  last_seen_at TIMESTAMP NULL,
+  fw_info      VARCHAR(120) NULL,
+  created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_devices_station (station_id),
+  CONSTRAINT fk_device_station FOREIGN KEY (station_id)
+    REFERENCES stations(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+INSERT INTO devices (device_key, name, station_id, mode) VALUES
+  ('CHANGE_ME_DEVICE_KEY', 'CMW Charger #01 (XY12550S)', 1, 'OFFLINE');
+
+-- ===== Kaitkan kanal → stasiun & mesin =====
 ALTER TABLE channels
   ADD CONSTRAINT fk_channel_station FOREIGN KEY (station_id)
   REFERENCES stations(id) ON DELETE SET NULL;
+ALTER TABLE channels
+  ADD CONSTRAINT fk_channel_device FOREIGN KEY (device_id)
+  REFERENCES devices(id) ON DELETE SET NULL;
+ALTER TABLE channels
+  ADD UNIQUE KEY uq_channel_device_ch (device_id, device_ch);
 
--- ===== Data awal: 3 kanal siap pakai, disebar ke beberapa SPKLU contoh =====
-INSERT INTO channels (station_id, status) VALUES
-  (1, 'READY'),   -- CH-01 → CMW SPKLU Sudirman Hub
-  (2, 'READY'),   -- CH-02 → CMW SPKLU Kelapa Gading
-  (6, 'READY');   -- CH-03 → CMW SPKLU Bandung Dago
+-- ===== Data awal: 3 kanal = 3 konektor mesin CMW Charger #01 (di SPKLU Sudirman Hub) =====
+INSERT INTO channels (station_id, device_id, device_ch, status) VALUES
+  (1, 1, 1, 'READY'),   -- CH-01 → konektor 1 mesin
+  (1, 1, 2, 'READY'),   -- CH-02 → konektor 2 mesin
+  (1, 1, 3, 'READY');   -- CH-03 → konektor 3 mesin
 
 -- ============================================================================
 -- Membuat admin:

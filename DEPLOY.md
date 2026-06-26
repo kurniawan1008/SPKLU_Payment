@@ -106,6 +106,11 @@ mysql -u spklu -p spklu_db < db/schema.sql
 > mysql -u spklu -p spklu_db < db/migration_stations.sql
 > mysql -u spklu -p spklu_db < db/migration_topup_requests.sql
 > mysql -u spklu -p spklu_db < db/migration_channel_station.sql
+> mysql -u spklu -p spklu_db < db/migration_devices.sql
+> ```
+> Setelah `migration_devices.sql`, ganti `device_key` default dengan token rahasia:
+> ```bash
+> mysql -u spklu -p spklu_db -e "UPDATE devices SET device_key='TOKEN_ACAK_RAHASIA' WHERE id=1;"
 > ```
 
 ---

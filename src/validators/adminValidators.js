@@ -9,4 +9,8 @@ const overrideStopSchema = makeValidator({
   sessionId: { required: true, label: 'ID sesi' },
 });
 
-module.exports = { adminTopupSchema, overrideStopSchema };
+const deviceModeSchema = makeValidator({
+  mode: { required: true, enum: ['ONLINE', 'OFFLINE'], label: 'Mode' },
+});
+
+module.exports = { adminTopupSchema, overrideStopSchema, deviceModeSchema };

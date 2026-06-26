@@ -191,6 +191,150 @@
 }
 .spklu-meta > span svg { color: var(--text-faint); }
 
+/* ===================== MESIN SPKLU (gateway ESP32) ===================== */
+/* --- Header kartu mesin: identitas kiri + status kanan --- */
+.dev-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.dev-head-id { display: inline-flex; align-items: center; gap: 0.7rem; min-width: 0; }
+.dev-head-id > span { display: flex; flex-direction: column; min-width: 0; }
+.dev-head-meta {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Kontrol mode operasi (FREE / PAYMENT) --- */
+.dev-mode {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.7rem 0.95rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.dev-mode-label {
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+}
+.dev-mode-seg {
+  display: inline-grid;
+  grid-template-columns: repeat(2, auto);
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border-mid);
+}
+.dev-mode-seg button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 0.4rem 1rem;
+  border-radius: 7px;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  transition: all 0.15s ease;
+}
+.dev-mode-seg button:hover:not(:disabled) { color: var(--text); }
+.dev-mode-seg button:disabled { cursor: default; opacity: 0.7; }
+.dev-mode-seg button.on {
+  background: var(--grad-accent);
+  color: var(--accent-ink);
+  box-shadow: 0 4px 14px -6px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+.dev-mode-hint { font-size: 11px; color: var(--text-faint); }
+.dev-mode-warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 11px;
+  color: var(--warning);
+  margin-left: auto;
+}
+
+/* --- Grid konektor mesin --- */
+.dev-conn-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.9rem;
+}
+.dev-conn {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.95rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.dev-conn.is-fault {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface-2));
+}
+.dev-conn-top { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.dev-conn-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+}
+.dev-metrics {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.dev-metrics b { color: var(--text); font-size: 14px; }
+.dev-metrics-sub b { font-size: 12.5px; }
+.dev-conn-foot {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+.dev-temp, .dev-prot, .dev-auth {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--text-faint);
+}
+.dev-prot.bad { color: var(--danger); font-weight: 600; }
+.dev-auth { color: var(--accent-hi); }
+.dev-conn-idle { font-size: 11.5px; color: var(--text-faint); margin: 0.2rem 0; }
+
+/* --- Umpan kejadian mesin --- */
+.dev-evt-list { display: flex; flex-direction: column; gap: 0.4rem; }
+.dev-evt-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.2rem;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.dev-evt-row:last-child { border-bottom: none; }
+.dev-evt-time { font-size: 11px; color: var(--text-faint); margin-left: auto; }
+
 /* ===================== RESPONSIF ===================== */
 @media (max-width: 1100px) {
   .admin-kpi-row { grid-template-columns: repeat(3, 1fr); }

@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const validate = require('../middlewares/validate');
 const { authenticate, authorize } = require('../middlewares/auth');
-const { adminTopupSchema, overrideStopSchema } = require('../validators/adminValidators');
+const { adminTopupSchema, overrideStopSchema, deviceModeSchema } = require('../validators/adminValidators');
 const ctrl = require('../controllers/adminController');
 
 // Guard admin per-rute (login + peran ADMIN).
@@ -17,5 +17,10 @@ router.post('/admin/topup', admin, validate(adminTopupSchema), ctrl.topup);
 router.post('/admin/topup-requests/:id/approve', admin, ctrl.approveTopup);
 router.post('/admin/topup-requests/:id/reject', admin, ctrl.rejectTopup);
 router.post('/admin/channel/override-stop', admin, validate(overrideStopSchema), ctrl.overrideStop);
+
+// Kontrol mesin SPKLU (gateway ESP32).
+router.get('/admin/devices', admin, ctrl.listDevices);
+router.post('/admin/devices/:id/mode', admin, validate(deviceModeSchema), ctrl.setDeviceMode);
+router.post('/admin/devices/:id/clear', admin, ctrl.clearDeviceFault);
 
 module.exports = router;

@@ -90,7 +90,25 @@ Semua respons memakai envelope konsisten: `{ "success": true, "data": ... }` ata
   utilisasi kanal, dan **`stationPerf`** — performa per titik SPKLU (energi, sesi, pendapatan,
   utilisasi konektor), digabung dari sesi nyata + metadata stasiun.
 - **`GET /api/admin/dashboard`** (admin) — kini menyertakan `stations[]` untuk pemilih SPKLU
-  di Monitor kanal, dan kolom `station_*` (nama, kota, daya, tipe) di tiap baris `channels[]`.
+  di Monitor kanal, kolom `station_*` di tiap baris `channels[]`, dan `devices[]` (mesin fisik).
+- **`GET /api/admin/devices`** (admin) — daftar mesin SPKLU fisik (online, mode, stasiun, kanal).
+- **`POST /api/admin/devices/:id/mode`** (admin) — set mode mesin `ONLINE` (PAYMENT) / `OFFLINE` (FREE).
+- **`POST /api/admin/devices/:id/clear`** (admin) — kirim clear-fault ke konektor mesin.
+
+## Integrasi mesin fisik (ESP32 XY12550S)
+
+Mesin SPKLU nyata tersambung lewat jembatan **Serial ↔ Socket.IO**:
+
+```
+[ESP32 Rev8.2] --USB serial 115200--> [gateway/ (PC/RasPi)] --Socket.IO /device--> [Server]
+```
+
+- **Firmware & protokol:** `SPKLU_esp32/INTEGRATION.md` (perintah `$...` turun, event `#...` naik).
+- **Gateway:** folder [`gateway/`](gateway/) — relay bodoh tahan-banting (auto-reconnect serial & socket).
+- **Server:** namespace `/device` (auth `device_key`), telemetri & settle dari kWh **asli** mesin
+  (`#EVT session_complete`), bukan simulasi. Kanal terikat mesin tak disimulasikan.
+- **Admin:** tab **Mesin SPKLU** memantau status online, V/A/kW per konektor, suhu, proteksi,
+  dengan kontrol mode (FREE/PAYMENT) & clear-fault.
 
 ## Database
 
@@ -104,9 +122,11 @@ mysql -u spklu -p spklu_db < db/schema.sql
 mysql -u spklu -p spklu_db < db/migration_stations.sql
 mysql -u spklu -p spklu_db < db/migration_topup_requests.sql
 mysql -u spklu -p spklu_db < db/migration_channel_station.sql
+mysql -u spklu -p spklu_db < db/migration_devices.sql      # integrasi mesin fisik
 ```
 Setiap skrip migrasi bersifat **idempoten** (aman dijalankan ulang; kolom/constraint dicek via
-`information_schema` sebelum ditambahkan).
+`information_schema` sebelum ditambahkan). **Penting:** setelah `migration_devices.sql`, ganti
+`device_key` default (`CHANGE_ME_DEVICE_KEY`) dengan token acak rahasia.
 
 ## Peningkatan utama
 - **Backend:** MVC, error handler terpusat, validasi input, JWT via env,
