@@ -4,29 +4,20 @@ const ApiError = require('../utils/ApiError');
 // Memetakan baris DB (snake_case) ke kontrak Station publik (camelCase) —
 // bentuk persis yang diharapkan GET /api/stations & StationsPanel di klien.
 //
-// Bila query menyertakan agregat channel nyata (ch_total/ch_ready/ch_charging),
-// maka connectors/available/status DITURUNKAN dari kondisi channel sebenarnya
-// (mesin di lapangan), bukan metadata statis. Metadata asli tetap dibawa sebagai
-// metaConnectors/metaAvailable/metaStatus agar form admin tetap mengeditnya.
+// Jumlah konektor & ketersediaan SELALU mengikuti channel mesin yang terdaftar
+// (lewat agregat ch_total/ch_ready/ch_charging dari listStations) — 0 untuk
+// lokasi tanpa mesin. Status diturunkan saat lokasi punya channel; bila belum,
+// pakai status metadata (fallback manual untuk lokasi yang belum ada mesinnya).
 function toStation(r) {
-  const metaConnectors = Number(r.connectors);
-  const metaAvailable = Number(r.available);
-  const metaStatus = r.status;
+  const hasAgg = r.ch_total != null; // listStations menyertakan agregat; getStation tidak
+  const total = hasAgg ? Number(r.ch_total) : 0;
+  const ready = Number(r.ch_ready || 0);
+  const charging = Number(r.ch_charging || 0);
 
-  const chTotal = r.ch_total == null ? null : Number(r.ch_total);
-  const hasChannels = chTotal != null && chTotal > 0;
-  const chReady = Number(r.ch_ready || 0);
-  const chCharging = Number(r.ch_charging || 0);
-
-  let connectors = metaConnectors;
-  let available = metaAvailable;
-  let status = metaStatus;
-  if (hasChannels) {
-    connectors = chTotal;
-    available = chReady;
-    // ada konektor siap → ONLINE; semua terpakai → BUSY (Sibuk); sisanya OFFLINE.
-    status = chReady > 0 ? 'ONLINE' : chCharging > 0 ? 'BUSY' : 'OFFLINE';
-  }
+  const connectors = hasAgg ? total : Number(r.connectors);
+  const available = hasAgg ? ready : Number(r.available);
+  const status =
+    total > 0 ? (ready > 0 ? 'ONLINE' : charging > 0 ? 'BUSY' : 'OFFLINE') : r.status;
 
   return {
     id: Number(r.id),
@@ -38,23 +29,20 @@ function toStation(r) {
     status,
     connectors,
     available,
+    charging,
+    hasChannels: total > 0,
     powerKw: Number(r.power_kw),
     type: r.type,
     hours: r.hours,
-    // Info turunan + metadata mentah (untuk form admin & indikator UI).
-    hasChannels,
-    charging: chCharging,
-    metaConnectors,
-    metaAvailable,
-    metaStatus,
   };
 }
 
-// Memetakan input tervalidasi (camelCase) ke nilai kolom DB, sekaligus
-// menjaga invariant available <= connectors dan available >= 0.
+// Memetakan input tervalidasi (camelCase) ke nilai kolom DB. connectors/available
+// kini bersifat vestigial (tampilan diturunkan dari channel mesin), jadi default 0
+// bila form tidak mengirimnya — lokasi baru mulai dari 0 channel sampai ada mesin.
 function toColumns(data) {
-  const connectors = Number(data.connectors);
-  const available = Math.max(0, Math.min(Number(data.available ?? 0), connectors));
+  const connectors = Math.max(0, Number(data.connectors ?? 0) || 0);
+  const available = Math.max(0, Math.min(Number(data.available ?? 0) || 0, connectors));
   return {
     name: data.name,
     address: data.address,

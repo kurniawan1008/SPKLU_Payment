@@ -46,15 +46,13 @@ const NAV = [
   { id: 'overview', label: 'Ringkasan', icon: LayoutDashboard },
   { id: 'analytics', label: 'Analitik', icon: BarChart3 },
   { id: 'devices', label: 'Mesin SPKLU', icon: Cpu },
-  { id: 'stations', label: 'Lokasi SPKLU', icon: MapPin },
   { id: 'users', label: 'Manajemen user', icon: Users },
   { id: 'logs', label: 'Log aktivitas', icon: ScrollText },
 ];
 const SUBTITLES = {
   overview: 'Metrik & status channel realtime',
   analytics: 'Analisis energi, pendapatan & utilisasi',
-  devices: 'Monitor & kontrol mesin pengisian fisik',
-  stations: 'Kelola titik & detail lokasi SPKLU',
+  devices: 'Kelola lokasi, mesin & channel SPKLU',
   users: 'Kelola akun & deposit pelanggan',
   logs: 'Audit transaksi sistem',
 };
@@ -79,7 +77,6 @@ export default function Admin() {
       {tab === 'overview' && <Overview />}
       {tab === 'analytics' && <AnalyticsPanel />}
       {tab === 'devices' && <DevicesPanel />}
-      {tab === 'stations' && <StationsAdminPanel />}
       {tab === 'users' && <UsersPanel />}
       {tab === 'logs' && <LogsPanel />}
     </AppLayout>
@@ -768,6 +765,8 @@ function DevicesPanel() {
   const [editing, setEditing] = useState(null);  // null=tutup · {}=baru · device=ubah
   const [deleting, setDeleting] = useState(null); // mesin yang akan dihapus
   const [keyModal, setKeyModal] = useState(null); // { name, deviceKey, title, isNew }
+  const [editingStation, setEditingStation] = useState(null);  // null=tutup · EMPTY_STATION=baru · station=ubah
+  const [deletingStation, setDeletingStation] = useState(null); // lokasi yang akan dihapus
 
   const load = useCallback(() => {
     api.get('/admin/dashboard')
@@ -859,6 +858,21 @@ function DevicesPanel() {
     }
   };
 
+  const confirmDeleteStation = async () => {
+    if (!deletingStation) return;
+    setBusy('delsta');
+    try {
+      await api.del(`/admin/stations/${deletingStation.id}`);
+      toast(`Lokasi "${deletingStation.name}" dihapus.`, { type: 'success' });
+      setDeletingStation(null);
+      load();
+    } catch (err) {
+      toast(err.message, { type: 'error' });
+    } finally {
+      setBusy(null);
+    }
+  };
+
   if (!devices) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -872,45 +886,98 @@ function DevicesPanel() {
 
   const onlineCount = devices.filter((d) => d.online).length;
   const paymentCount = devices.filter((d) => d.mode === 'ONLINE').length;
+  const totalChannels = stations.reduce((sum, s) => sum + (Number(s.connectors) || 0), 0);
+  const stationsSorted = [...stations].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'id'));
+  const orphanDevices = devices.filter(
+    (d) => d.stationId == null || !stations.some((s) => s.id === d.stationId)
+  );
+
+  const renderDevice = (d) => (
+    <DeviceCard
+      key={d.id}
+      device={d}
+      live={live[d.id]}
+      busy={busy}
+      onSetMode={setMode}
+      onClearFault={clearFault}
+      onEdit={() => setEditing(d)}
+      onDelete={() => setDeleting(d)}
+      onRevealKey={() => revealKey(d)}
+      onRegenKey={() => regenKey(d)}
+    />
+  );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      <div className="stat-row" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
-        <StatCard icon={Cpu} accent="accent" label="Total mesin" value={number(devices.length)} sub="terdaftar" />
+      <div className="stat-row" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+        <StatCard icon={MapPin} accent="accent" label="Total lokasi" value={number(stations.length)} sub="titik SPKLU" />
+        <StatCard icon={Cpu} accent="cyan" label="Total mesin" value={number(devices.length)} sub={`${number(totalChannels)} channel`} />
         <StatCard icon={Wifi} accent="pos" label="Mesin online" value={number(onlineCount)} sub="gateway terhubung" />
-        <StatCard icon={Power} accent="cyan" label="Mode PAYMENT" value={number(paymentCount)} sub="butuh otorisasi bayar" />
+        <StatCard icon={Power} accent="warn" label="Mode PAYMENT" value={number(paymentCount)} sub="butuh otorisasi bayar" />
       </div>
 
       <div className="dev-toolbar">
-        <h2 className="panel-head"><Cpu size={16} /> Daftar mesin SPKLU</h2>
-        <Button onClick={() => setEditing({})} style={{ minHeight: 42, fontSize: 12.5 }}>
-          <PlusCircle size={14} /> Daftarkan mesin
-        </Button>
+        <h2 className="panel-head"><Cpu size={16} /> Lokasi, mesin &amp; channel SPKLU</h2>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <Button variant="ghost" onClick={() => setEditingStation(EMPTY_STATION)} style={{ minHeight: 42, fontSize: 12.5 }}>
+            <MapPin size={14} /> Tambah lokasi
+          </Button>
+          <Button onClick={() => setEditing({})} style={{ minHeight: 42, fontSize: 12.5 }}>
+            <PlusCircle size={14} /> Daftarkan mesin
+          </Button>
+        </div>
       </div>
 
-      {devices.length === 0 ? (
+      {stations.length === 0 && devices.length === 0 ? (
         <Card style={{ padding: '1.5rem' }}>
           <EmptyState
-            icon={Cpu}
-            title="Belum ada mesin terdaftar"
-            description="Klik “Daftarkan mesin” untuk menambahkan mesin SPKLU fisik, pilih stasiun & jumlah konektornya. Anda akan mendapat device_key untuk dipasang di gateway (RasPi)."
+            icon={MapPin}
+            title="Belum ada lokasi SPKLU"
+            description="Mulai dengan “Tambah lokasi” untuk titik SPKLU, lalu “Daftarkan mesin” untuk menambah mesin & channel di lokasi itu."
           />
         </Card>
       ) : (
-        devices.map((d) => (
-          <DeviceCard
-            key={d.id}
-            device={d}
-            live={live[d.id]}
-            busy={busy}
-            onSetMode={setMode}
-            onClearFault={clearFault}
-            onEdit={() => setEditing(d)}
-            onDelete={() => setDeleting(d)}
-            onRevealKey={() => revealKey(d)}
-            onRegenKey={() => regenKey(d)}
-          />
-        ))
+        stationsSorted.map((s) => {
+          const stDevices = devices.filter((d) => String(d.stationId) === String(s.id));
+          return (
+            <div key={s.id} className="station-group">
+              <Card className="station-head">
+                <div className="station-head-main">
+                  <MapPin size={18} color="var(--accent-hi)" />
+                  <span className="min-w-0" style={{ display: 'flex', flexDirection: 'column' }}>
+                    <b className="grotesk" style={{ color: 'var(--text)' }}>{s.name}</b>
+                    <span className="mono station-head-addr">{s.address}{s.city ? `, ${s.city}` : ''}</span>
+                  </span>
+                </div>
+                <div className="station-head-meta">
+                  <span className="mono station-chip"><Zap size={12} /> {number(s.powerKw)} kW · {s.type}</span>
+                  <span className="mono station-chip"><Plug size={12} /> {number(s.connectors)} channel</span>
+                  <span className="mono station-chip"><Cpu size={12} /> {number(stDevices.length)} mesin</span>
+                  <Badge variant={ST_STATUS_VARIANT[s.status] || 'muted'} dot={s.status === 'ONLINE'}>
+                    {ST_STATUS_LABEL[s.status] || s.status}
+                  </Badge>
+                  <span style={{ display: 'inline-flex', gap: 6, marginLeft: 'auto' }}>
+                    <Button variant="ghost" onClick={() => setEditing({ stationId: s.id })} style={{ minHeight: 34, fontSize: 12, padding: '0 0.7rem' }}><PlusCircle size={13} /> Mesin</Button>
+                    <Button variant="ghost" onClick={() => setEditingStation(s)} style={{ minHeight: 34, fontSize: 12, padding: '0 0.7rem' }}><Pencil size={13} /> Lokasi</Button>
+                    <Button variant="danger" onClick={() => setDeletingStation(s)} style={{ minHeight: 34, fontSize: 12, padding: '0 0.7rem' }}><Trash2 size={13} /> Hapus</Button>
+                  </span>
+                </div>
+              </Card>
+              {stDevices.length === 0 ? (
+                <p className="mono station-empty">Belum ada mesin di lokasi ini — klik “Mesin” untuk mendaftarkan.</p>
+              ) : (
+                stDevices.map(renderDevice)
+              )}
+            </div>
+          );
+        })
+      )}
+
+      {orphanDevices.length > 0 && (
+        <div className="station-group">
+          <h3 className="station-orphan-head">Mesin tanpa lokasi</h3>
+          {orphanDevices.map(renderDevice)}
+        </div>
       )}
 
       {/* Umpan kejadian mesin (realtime) */}
@@ -982,6 +1049,37 @@ function DevicesPanel() {
       >
         {keyModal && <DeviceKeyView name={keyModal.name} deviceKey={keyModal.deviceKey} isNew={keyModal.isNew} warn={keyModal.warn} />}
       </Modal>
+
+      {/* Form tambah / ubah lokasi SPKLU */}
+      <StationFormModal
+        station={editingStation}
+        onClose={() => setEditingStation(null)}
+        onSaved={() => { setEditingStation(null); load(); }}
+      />
+
+      {/* Konfirmasi hapus lokasi */}
+      <Modal
+        open={!!deletingStation}
+        onClose={() => setDeletingStation(null)}
+        title="Hapus lokasi SPKLU"
+        icon={Trash2}
+        footer={
+          <div style={{ display: 'flex', gap: 10, width: '100%' }}>
+            <Button variant="ghost" className="btn-block" onClick={() => setDeletingStation(null)} style={{ minHeight: 48 }}>Batal</Button>
+            <Button variant="danger" className="btn-block" loading={busy === 'delsta'} onClick={confirmDeleteStation} style={{ minHeight: 48 }}><Trash2 size={16} /> Hapus</Button>
+          </div>
+        }
+      >
+        {deletingStation && (() => {
+          const n = devices.filter((d) => String(d.stationId) === String(deletingStation.id)).length;
+          return (
+            <p className="mono" style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+              Hapus lokasi <b style={{ color: 'var(--text)' }}>{deletingStation.name}</b> ({deletingStation.city})?
+              {n > 0 ? ` ${n} mesin di lokasi ini akan menjadi "tanpa lokasi" (tidak ikut terhapus).` : ' Tindakan ini tidak dapat dibatalkan.'}
+            </p>
+          );
+        })()}
+      </Modal>
     </div>
   );
 }
@@ -1027,7 +1125,7 @@ function DeviceFormModal({ device, stations, onClose, onSaved }) {
     if (device.id != null) {
       setForm({ name: device.name || '', stationId: device.stationId ?? '', connectors: device.channels || 3 });
     } else {
-      setForm({ name: '', stationId: stations[0]?.id ?? '', connectors: 3 });
+      setForm({ name: '', stationId: device.stationId ?? stations[0]?.id ?? '', connectors: 3 });
     }
   }, [device, stations]);
 
@@ -1253,139 +1351,12 @@ const ST_TYPES = ['DC', 'AC', 'DC/AC'];
 const ST_STATUS_VARIANT = { ONLINE: 'ready', BUSY: 'busy', OFFLINE: 'muted' };
 const ST_STATUS_LABEL = { ONLINE: 'Online', BUSY: 'Sibuk', OFFLINE: 'Offline' };
 
-// Nilai awal form untuk stasiun baru (semua string agar cocok input terkontrol).
+// Nilai awal form untuk lokasi baru (semua string agar cocok input terkontrol).
+// Jumlah channel TIDAK di sini — ditentukan oleh mesin yang terdaftar.
 const EMPTY_STATION = {
   name: '', address: '', city: '', lat: '', lng: '',
-  status: 'ONLINE', connectors: '2', available: '0',
-  powerKw: '60', type: 'DC', hours: '24 Jam',
+  status: 'ONLINE', powerKw: '60', type: 'DC', hours: '24 Jam',
 };
-
-function StationsAdminPanel() {
-  const toast = useToast();
-  const [stations, setStations] = useState(null);
-  const [q, setQ] = useState('');
-  const [editing, setEditing] = useState(null);   // null=tutup · EMPTY_STATION=baru · {id,...}=ubah
-  const [deleting, setDeleting] = useState(null);  // stasiun yang akan dihapus
-  const [busy, setBusy] = useState(false);
-
-  const load = useCallback(() => {
-    api.get('/stations')
-      .then((d) => setStations(Array.isArray(d) ? d : []))
-      .catch((err) => { toast(err.message, { type: 'error' }); setStations([]); });
-  }, [toast]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const filtered = (stations || []).filter(
-    (s) => !q || `${s.name} ${s.city} ${s.address}`.toLowerCase().includes(q.toLowerCase())
-  );
-
-  const online = (stations || []).filter((s) => s.status === 'ONLINE').length;
-  const totalConnectors = (stations || []).reduce((sum, s) => sum + (Number(s.connectors) || 0), 0);
-
-  const confirmDelete = async () => {
-    if (!deleting) return;
-    setBusy(true);
-    try {
-      await api.del(`/admin/stations/${deleting.id}`);
-      toast(`Stasiun "${deleting.name}" dihapus.`, { type: 'success' });
-      setDeleting(null);
-      load();
-    } catch (err) {
-      toast(err.message, { type: 'error' });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      {/* Ringkasan */}
-      <div className="stat-row" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
-        <StatCard icon={MapPin} accent="accent" label="Total stasiun" value={number((stations || []).length)} sub="titik SPKLU" />
-        <StatCard icon={Zap} accent="pos" label="Stasiun online" value={number(online)} sub="siap melayani" />
-        <StatCard icon={Plug} accent="cyan" label="Total konektor" value={number(totalConnectors)} sub="seluruh stasiun" />
-      </div>
-
-      <Card style={{ overflow: 'hidden' }}>
-        {/* Toolbar: cari + tambah */}
-        <div style={{ padding: '1.1rem', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <h2 className="panel-head"><MapPin size={16} /> Lokasi SPKLU</h2>
-          <div className="admin-toolbar">
-            <div className="admin-search">
-              <Input icon={Search} placeholder="Cari nama, kota, atau alamat…" value={q} onChange={(e) => setQ(e.target.value)} />
-            </div>
-            <Button onClick={() => setEditing(EMPTY_STATION)} style={{ minHeight: 42, fontSize: 12.5 }}>
-              <PlusCircle size={14} /> Tambah stasiun
-            </Button>
-          </div>
-        </div>
-
-        <div style={{ overflowX: 'auto' }}>
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Stasiun</th><th>Status</th><th>Konektor</th>
-                <th>Daya / tipe</th><th>Jam</th><th style={{ textAlign: 'right' }}>Aksi</th>
-              </tr>
-            </thead>
-            <tbody>
-              {stations === null &&
-                Array.from({ length: 5 }).map((_, i) => <tr key={i}><td colSpan={6}><Skeleton height={20} /></td></tr>)}
-              {filtered.map((s) => (
-                <tr key={s.id}>
-                  <td>
-                    <p className="grotesk" style={{ fontWeight: 600, color: 'var(--text)' }}>{s.name}</p>
-                    <p className="mono" style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>{s.address}, {s.city}</p>
-                  </td>
-                  <td><Badge variant={ST_STATUS_VARIANT[s.status] || 'muted'} dot={s.status === 'ONLINE'}>{ST_STATUS_LABEL[s.status] || s.status}</Badge></td>
-                  <td className="mono">{number(s.available)}/{number(s.connectors)}</td>
-                  <td className="mono">{number(s.powerKw)} kW · {s.type}</td>
-                  <td className="mono" style={{ fontSize: 12 }}>{s.hours}</td>
-                  <td>
-                    <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                      <Button variant="ghost" onClick={() => setEditing(s)} style={{ minHeight: 34, fontSize: 12, padding: '0 0.7rem' }}><Pencil size={13} /> Ubah</Button>
-                      <Button variant="danger" onClick={() => setDeleting(s)} style={{ minHeight: 34, fontSize: 12, padding: '0 0.7rem' }}><Trash2 size={13} /> Hapus</Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {stations && filtered.length === 0 && (
-          <EmptyState icon={MapPin} title="Belum ada stasiun" description={q ? 'Tidak ada hasil untuk pencarian ini.' : 'Tambahkan titik SPKLU pertama Anda.'} />
-        )}
-      </Card>
-
-      <StationFormModal
-        station={editing}
-        onClose={() => setEditing(null)}
-        onSaved={() => { setEditing(null); load(); }}
-      />
-
-      {/* Konfirmasi hapus */}
-      <Modal
-        open={!!deleting}
-        onClose={() => setDeleting(null)}
-        title="Hapus stasiun"
-        icon={Trash2}
-        footer={
-          <div style={{ display: 'flex', gap: 10, width: '100%' }}>
-            <Button variant="ghost" className="btn-block" onClick={() => setDeleting(null)} style={{ minHeight: 48 }}>Batal</Button>
-            <Button variant="danger" className="btn-block" loading={busy} onClick={confirmDelete} style={{ minHeight: 48 }}><Trash2 size={16} /> Hapus</Button>
-          </div>
-        }
-      >
-        {deleting && (
-          <p className="mono" style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-            Yakin menghapus <b style={{ color: 'var(--text)' }}>{deleting.name}</b> ({deleting.city})? Tindakan ini tidak dapat dibatalkan.
-          </p>
-        )}
-      </Modal>
-    </div>
-  );
-}
 
 function StationFormModal({ station, onClose, onSaved }) {
   const toast = useToast();
@@ -1403,11 +1374,9 @@ function StationFormModal({ station, onClose, onSaved }) {
       city: station.city ?? '',
       lat: station.lat ?? '',
       lng: station.lng ?? '',
-      // Pakai metadata mentah (meta*) — field utama kini berisi nilai NYATA dari
-      // channel mesin, sedangkan form ini mengedit metadata stasiun.
-      status: station.metaStatus ?? station.status ?? 'ONLINE',
-      connectors: String(station.metaConnectors ?? station.connectors ?? '2'),
-      available: String(station.metaAvailable ?? station.available ?? '0'),
+      // Jumlah channel TIDAK diisi di sini — ditentukan oleh mesin yang terdaftar.
+      // Status hanya jadi fallback untuk lokasi yang belum punya mesin.
+      status: station.status ?? 'ONLINE',
       powerKw: String(station.powerKw ?? '60'),
       type: station.type ?? 'DC',
       hours: station.hours ?? '24 Jam',
@@ -1431,8 +1400,6 @@ function StationFormModal({ station, onClose, onSaved }) {
       ...form,
       lat: Number(form.lat),
       lng: Number(form.lng),
-      connectors: Number(form.connectors),
-      available: Number(form.available),
       powerKw: Number(form.powerKw),
     };
     try {
@@ -1513,12 +1480,13 @@ function StationFormModal({ station, onClose, onSaved }) {
           )}
         </div>
 
-        <Input label="Total konektor" type="number" min="1" value={form.connectors} onChange={set('connectors')} error={errors.connectors} placeholder="cth. 4" />
-        <Input label="Konektor tersedia" type="number" min="0" value={form.available} onChange={set('available')} error={errors.available} hint="Otomatis dibatasi ≤ total konektor." placeholder="cth. 2" />
-
         <div className="full">
           <Input label="Jam operasional" value={form.hours} onChange={set('hours')} error={errors.hours} placeholder="cth. 24 Jam atau 06.00 - 22.00" />
         </div>
+        <p className="mono full" style={{ fontSize: 11.5, color: 'var(--text-faint)', margin: 0 }}>
+          <Plug size={12} style={{ verticalAlign: '-2px', marginRight: 4 }} />
+          Jumlah channel lokasi ini mengikuti mesin yang terdaftar — daftarkan/ubah mesin lewat tombol “Daftarkan mesin”.
+        </p>
       </div>
     </Modal>
   );
