@@ -16,17 +16,20 @@ function createApp() {
   // dari header X-Forwarded-For, bukan IP proxy. Hanya percayai 1 hop (Nginx).
   if (config.isProd) app.set('trust proxy', 1);
 
-  // CSP: restrict script sources to 'self' untuk mencegah XSS stealing localStorage tokens.
   app.use(
     helmet({
       contentSecurityPolicy: {
         directives: {
           defaultSrc: ["'self'"],
           scriptSrc: ["'self'"],
-          styleSrc: ["'self'", "'unsafe-inline'"],
+          styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+          fontSrc: ["'self'", 'https://fonts.gstatic.com'],
           imgSrc: ["'self'", 'data:', 'https:'],
+          connectSrc: ["'self'", 'ws:', 'wss:', 'https://maps.googleapis.com'],
+          frameSrc: ["'self'", 'https://www.google.com', 'https://maps.google.com'],
         },
       },
+      crossOriginEmbedderPolicy: false,
     })
   );
   app.use(cors({ origin: config.allowedOrigins }));
