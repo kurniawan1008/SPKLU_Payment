@@ -27,9 +27,11 @@ function createApp() {
           imgSrc: ["'self'", 'data:', 'https:'],
           connectSrc: ["'self'", 'ws:', 'wss:', 'https://maps.googleapis.com'],
           frameSrc: ["'self'", 'https://www.google.com', 'https://maps.google.com'],
+          upgradeInsecureRequests: null,
         },
       },
       crossOriginEmbedderPolicy: false,
+      hsts: false,
     })
   );
   app.use(cors({ origin: config.allowedOrigins }));
